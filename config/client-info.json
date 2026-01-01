@@ -1,0 +1,5 @@
+{
+  "restaurant_name": "INSERT_RESTAURANT_NAME",
+  "owner_name": "INSERT_OWNER_NAME",
+  "verification_code": "UNIQUE_CODE_123"
+}

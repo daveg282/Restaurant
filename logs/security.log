@@ -1,0 +1,4 @@
+{"timestamp":"2025-12-08T14:56:54.109Z","event":"failed_auth","data":{"adminId":"it_superadmin","reason":"password_mismatch"}}
+{"timestamp":"2025-12-08T15:18:17.716Z","event":"reset_failed","data":{"error":"Cannot find module './src/telegram'\nRequire stack:\n- /Users/dawitgirma/Restaurant/node_modules/node-telegram-bot-api/index.js\n- /Users/dawitgirma/Restaurant/bin/emergency-reset-admin.js"}}
+{"timestamp":"2025-12-08T15:42:34.051Z","event":"emergency_reset_completed","data":{"adminId":"it_superadmin","restaurant":"INSERT_RESTAURANT_NAME","targetAdminId":"10","targetEmail":"admin@restaurant.com","timestamp":"2025-12-08T15:42:34.050Z","ip":"172.20.10.3"}}
+{"timestamp":"2025-12-18T08:55:55.571Z","event":"emergency_reset_completed","data":{"adminId":"it_superadmin","restaurant":"INSERT_RESTAURANT_NAME","targetAdminId":"10","targetEmail":"admin@restaurant.com","timestamp":"2025-12-18T08:55:55.569Z","ip":"172.20.10.3"}}

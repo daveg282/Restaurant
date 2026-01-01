@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp": "2025-12-08T15:42:34.301Z",
+    "it_admin": "it_superadmin",
+    "restaurant": "INSERT_RESTAURANT_NAME",
+    "target_admin": "admin@restaurant.com",
+    "action": "password_reset",
+    "method": "telegram"
+  },
+  {
+    "timestamp": "2025-12-18T08:55:55.816Z",
+    "it_admin": "it_superadmin",
+    "restaurant": "INSERT_RESTAURANT_NAME",
+    "target_admin": "admin@restaurant.com",
+    "action": "password_reset",
+    "method": "telegram"
+  }
+]
