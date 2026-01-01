@@ -1,7 +1,7 @@
-const Order = require('../models/Order');
+const Order = require('../models/order');
 const OrderItem = require('../models/orderItem');
-const Table = require('../models/Table');
-const Pager = require('../models/Pager');
+const Table = require('../models/table');
+const Pager = require('../models/pager');
 const MenuItem = require('../models/menuItem');
 
 class OrderController {
