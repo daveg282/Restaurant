@@ -1,5 +1,5 @@
 // controllers/InventoryController.js
-const Ingredient = require('../models/ingredient');
+const Ingredient = require('../models/Ingredient');
 
 class InventoryController {
  
