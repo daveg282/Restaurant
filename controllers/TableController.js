@@ -1,5 +1,5 @@
 const Table = require('../models/table');
-const Pager = require('../models/Pager');
+const Pager = require('../models/pager');
 
 class TableController {
   // Get all tables
