@@ -1,5 +1,5 @@
 const ReportModel = require('../models/Report');
-const Ingredient = require('../models/Ingredient');
+const Ingredient = require('../models/ingredient');
 
 class ReportController {
   // ========== DASHBOARD ENDPOINTS ==========
