@@ -32,7 +32,7 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:8000', 'http://localhost:3000', 'https://vortex-admin-kuku.pro.et',  'http://vortex-admin-kuku.pro.et' ],
+  origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:8000', 'http://localhost:3000', 'http://localhost:3001', 'https://vortex-admin-kuku.pro.et',  'http://vortex-admin-kuku.pro.et' ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
