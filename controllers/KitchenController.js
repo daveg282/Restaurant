@@ -68,12 +68,9 @@ class KitchenController {
   static async getKitchenStats(req, res) {
     try {
       const stats = await Order.getKitchenStats();
-      const popularItems = await Order.getPopularItems(5);
-      
       res.json({
         success: true,
         stats,
-        popular_items: popularItems,
         date: new Date().toISOString().split('T')[0]
       });
     } catch (error) {
