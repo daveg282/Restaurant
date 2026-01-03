@@ -814,25 +814,18 @@ static async getKitchenStats() {
   try {
     const sql = `
       SELECT 
-        COALESCE(COUNT(*), 0) as total_orders_today,
-        COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending_orders,
-        COALESCE(SUM(CASE WHEN status = 'preparing' THEN 1 ELSE 0 END), 0) as preparing_orders,
-        COALESCE(SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END), 0) as ready_orders
+        COUNT(*) as total_orders_today,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
+        SUM(CASE WHEN status = 'preparing' THEN 1 ELSE 0 END) as preparing_orders,
+        SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) as ready_orders
       FROM orders
       WHERE DATE(order_time) = CURDATE()
     `;
     
     const stats = await db.queryOne(sql);
     
-    // Convert all values to numbers to ensure consistent type
-    return {
-      total_orders_today: Number(stats.total_orders_today || 0),
-      pending_orders: Number(stats.pending_orders || 0),
-      preparing_orders: Number(stats.preparing_orders || 0),
-      ready_orders: Number(stats.ready_orders || 0)
-    };
+    return stats;
   } catch (error) {
-    console.error('Database error in getKitchenStats:', error);
     throw new Error(`Error getting kitchen stats: ${error.message}`);
   }
 }
@@ -840,36 +833,20 @@ static async getKitchenStats() {
 // Get popular items
 static async getPopularItems(limit = 5) {
   try {
-    console.log(`🟢 Fetching top ${limit} popular items for today`);
-    
     const sql = `
       SELECT 
-        mi.id,
         mi.name,
-        COALESCE(SUM(oi.quantity), 0) as total_quantity
+        SUM(oi.quantity) as total_quantity
       FROM order_items oi
       LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-      LEFT JOIN orders o ON oi.order_id = o.id
-      WHERE DATE(o.order_time) = CURDATE()
+      WHERE DATE(oi.created_at) = CURDATE()
       GROUP BY mi.id, mi.name
-      HAVING total_quantity > 0
       ORDER BY total_quantity DESC
       LIMIT ?
     `;
     
-    const items = await db.query(sql, [limit]);
-    
-    console.log(`🟢 Found ${items.length} popular items:`, items);
-    
-    // Ensure consistent data format
-    return items.map(item => ({
-      id: item.id,
-      name: item.name || 'Unknown Item',
-      total_quantity: Number(item.total_quantity || 0)
-    }));
-    
+    return await db.query(sql, [limit]);
   } catch (error) {
-    console.error('🔴 Error in getPopularItems:', error);
     throw new Error(`Error getting popular items: ${error.message}`);
   }
 }
