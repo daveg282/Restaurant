@@ -671,7 +671,7 @@ static async getPendingPayments() {
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
-      WHERE o.status = 'ready' 
+      WHERE o.status = 'completed'  
         AND o.payment_status = 'pending'
       ORDER BY o.order_time ASC
     `;
@@ -951,6 +951,291 @@ static async getWaiterDailyOrders(waiterId, date = null) {
   } catch (error) {
     console.error('Error in getWaiterDailyOrders:', error);
     throw new Error(`Error getting daily orders: ${error.message}`);
+  }
+}
+static async getSalesSummary(filters = {}) {
+  try {
+    console.log('Getting sales summary with filters:', filters);
+    
+    let dateCondition = '1=1';
+    const params = [];
+    
+    // Handle simple date filtering
+    if (filters.period === 'today') {
+      dateCondition = 'DATE(order_time) = CURDATE()';
+    } else if (filters.period === 'week') {
+      dateCondition = 'order_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)';
+    } else if (filters.period === 'month') {
+      dateCondition = 'order_time >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
+    } else if (filters.date) {
+      dateCondition = 'DATE(order_time) = ?';
+      params.push(filters.date);
+    } else if (filters.start_date && filters.end_date) {
+      dateCondition = 'DATE(order_time) BETWEEN ? AND ?';
+      params.push(filters.start_date, filters.end_date);
+    }
+    
+    // SIMPLE summary query without subqueries
+    const summarySql = `
+      SELECT 
+        COUNT(*) as total_orders,
+        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(SUM(tax), 0) as total_tax,
+        COALESCE(SUM(tip), 0) as total_tips,
+        COALESCE(SUM(discount), 0) as total_discounts,
+        COALESCE(AVG(total_amount), 0) as average_order_value,
+        
+        -- Payment method breakdown
+        COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total_amount ELSE 0 END), 0) as cash_sales,
+        COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total_amount ELSE 0 END), 0) as card_sales,
+        COALESCE(SUM(CASE WHEN payment_method = 'mobile' THEN total_amount ELSE 0 END), 0) as mobile_sales,
+        
+        -- Simple counts
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_orders,
+        COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders,
+        COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_orders,
+        COUNT(CASE WHEN payment_status = 'pending' THEN 1 END) as pending_payment_orders
+        
+      FROM orders
+      WHERE payment_status = 'paid'
+        AND ${dateCondition}
+    `;
+    
+    console.log('Summary SQL:', summarySql);
+    console.log('Params:', params);
+    
+    const summary = await db.queryOne(summarySql, params);
+    console.log('Summary result:', summary);
+    
+    // Get payment methods separately
+    const paymentMethodsSql = `
+      SELECT 
+        payment_method,
+        COUNT(*) as count,
+        COALESCE(SUM(total_amount), 0) as total_amount
+      FROM orders
+      WHERE payment_status = 'paid'
+        AND ${dateCondition}
+      GROUP BY payment_method
+      ORDER BY count DESC
+    `;
+    
+    const paymentMethods = await db.query(paymentMethodsSql, params);
+    console.log('Payment methods:', paymentMethods);
+    
+    // Get top items separately
+    const topItemsSql = `
+      SELECT 
+        mi.name,
+        COALESCE(SUM(oi.quantity), 0) as quantity_sold,
+        COALESCE(SUM(oi.price * oi.quantity), 0) as revenue
+      FROM order_items oi
+      LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+      LEFT JOIN orders o ON oi.order_id = o.id
+      WHERE o.payment_status = 'paid'
+        AND ${dateCondition}
+      GROUP BY mi.id, mi.name
+      ORDER BY quantity_sold DESC
+      LIMIT 5
+    `;
+    
+    const topItems = await db.query(topItemsSql, params);
+    console.log('Top items:', topItems);
+    
+    // Get detailed data for export
+    const detailedSql = `
+      SELECT 
+        o.order_number,
+        o.total_amount as amount,
+        o.payment_method,
+        DATE_FORMAT(o.order_time, '%Y-%m-%d %H:%i') as time,
+        COALESCE(t.table_number, 'Takeaway') as table_number,
+        COALESCE(o.customer_name, 'Walk-in') as customer_name
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      WHERE o.payment_status = 'paid'
+        AND ${dateCondition}
+      ORDER BY o.order_time DESC
+    `;
+    
+    const detailedData = await db.query(detailedSql, params);
+    
+    return {
+      success: true,
+      summary: {
+        total_orders: parseInt(summary.total_orders) || 0,
+        total_sales: parseFloat(summary.total_sales) || 0,
+        total_tax: parseFloat(summary.total_tax) || 0,
+        total_tips: parseFloat(summary.total_tips) || 0,
+        total_discounts: parseFloat(summary.total_discounts) || 0,
+        cash_sales: parseFloat(summary.cash_sales) || 0,
+        card_sales: parseFloat(summary.card_sales) || 0,
+        mobile_sales: parseFloat(summary.mobile_sales) || 0,
+        average_order_value: parseFloat(summary.average_order_value) || 0,
+        completed_orders: parseInt(summary.completed_orders) || 0,
+        cancelled_orders: parseInt(summary.cancelled_orders) || 0,
+        paid_orders: parseInt(summary.paid_orders) || 0,
+        pending_payment_orders: parseInt(summary.pending_payment_orders) || 0
+      },
+      payment_methods: paymentMethods.map(method => ({
+        payment_method: method.payment_method,
+        count: parseInt(method.count) || 0,
+        total_amount: parseFloat(method.total_amount) || 0,
+        percentage: paymentMethods.length > 0 ? 
+          Math.round((parseInt(method.count) / parseInt(summary.total_orders)) * 100) || 0 : 0
+      })),
+      top_items: topItems.map(item => ({
+        name: item.name || 'Unknown Item',
+        quantity_sold: parseInt(item.quantity_sold) || 0,
+        revenue: parseFloat(item.revenue) || 0
+      })),
+      detailed_data: detailedData,
+      filters: filters
+    };
+    
+  } catch (error) {
+    console.error('Error in getSalesSummary:', error);
+    throw new Error(`Error getting sales summary: ${error.message}`);
+  }
+}
+
+// Get daily sales report - STANDALONE SIMPLE VERSION
+static async getDailySalesReport(date = null) {
+  try {
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    console.log('Getting daily sales report for:', targetDate);
+    
+    // 1. Get basic summary for the day
+    const summarySql = `
+      SELECT 
+        COUNT(*) as total_orders,
+        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(SUM(tax), 0) as total_tax,
+        COALESCE(SUM(tip), 0) as total_tips,
+        COALESCE(SUM(discount), 0) as total_discounts,
+        COALESCE(AVG(total_amount), 0) as average_order_value,
+        
+        COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total_amount ELSE 0 END), 0) as cash_sales,
+        COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total_amount ELSE 0 END), 0) as card_sales,
+        COALESCE(SUM(CASE WHEN payment_method = 'mobile' THEN total_amount ELSE 0 END), 0) as mobile_sales
+        
+      FROM orders
+      WHERE payment_status = 'paid'
+        AND DATE(order_time) = ?
+    `;
+    
+    const summary = await db.queryOne(summarySql, [targetDate]);
+    console.log('Daily summary:', summary);
+    
+    // 2. Get hourly breakdown
+    const hourlySql = `
+      SELECT 
+        DATE_FORMAT(order_time, '%H:00') as hour,
+        COUNT(*) as order_count,
+        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(AVG(total_amount), 0) as avg_order_value
+      FROM orders
+      WHERE payment_status = 'paid'
+        AND DATE(order_time) = ?
+      GROUP BY DATE_FORMAT(order_time, '%H')
+      ORDER BY hour
+    `;
+    
+    const hourlyData = await db.query(hourlySql, [targetDate]);
+    console.log('Hourly data count:', hourlyData.length);
+    
+    // 3. Get payment methods
+    const paymentMethodsSql = `
+      SELECT 
+        payment_method,
+        COUNT(*) as count,
+        COALESCE(SUM(total_amount), 0) as total_amount
+      FROM orders
+      WHERE payment_status = 'paid'
+        AND DATE(order_time) = ?
+      GROUP BY payment_method
+      ORDER BY count DESC
+    `;
+    
+    const paymentMethods = await db.query(paymentMethodsSql, [targetDate]);
+    
+    // 4. Get top items for the day
+    const topItemsSql = `
+      SELECT 
+        mi.name,
+        COALESCE(SUM(oi.quantity), 0) as quantity_sold,
+        COALESCE(SUM(oi.price * oi.quantity), 0) as revenue
+      FROM order_items oi
+      LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+      LEFT JOIN orders o ON oi.order_id = o.id
+      WHERE o.payment_status = 'paid'
+        AND DATE(o.order_time) = ?
+      GROUP BY mi.id, mi.name
+      ORDER BY quantity_sold DESC
+      LIMIT 5
+    `;
+    
+    const topItems = await db.query(topItemsSql, [targetDate]);
+    
+    // 5. Get tables performance
+    const tablesSql = `
+      SELECT 
+        COALESCE(t.table_number, 'Takeaway') as table_number,
+        COUNT(o.id) as order_count,
+        COALESCE(SUM(o.total_amount), 0) as total_revenue
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      WHERE o.payment_status = 'paid'
+        AND DATE(o.order_time) = ?
+      GROUP BY t.id, t.table_number
+      ORDER BY total_revenue DESC
+      LIMIT 10
+    `;
+    
+    const topTables = await db.query(tablesSql, [targetDate]);
+    
+    return {
+      success: true,
+      date: targetDate,
+      summary: {
+        total_orders: parseInt(summary.total_orders) || 0,
+        total_sales: parseFloat(summary.total_sales) || 0,
+        total_tax: parseFloat(summary.total_tax) || 0,
+        total_tips: parseFloat(summary.total_tips) || 0,
+        total_discounts: parseFloat(summary.total_discounts) || 0,
+        cash_sales: parseFloat(summary.cash_sales) || 0,
+        card_sales: parseFloat(summary.card_sales) || 0,
+        mobile_sales: parseFloat(summary.mobile_sales) || 0,
+        average_order_value: parseFloat(summary.average_order_value) || 0
+      },
+      hourly_breakdown: hourlyData.map(hour => ({
+        hour: hour.hour || '00:00',
+        order_count: parseInt(hour.order_count) || 0,
+        total_sales: parseFloat(hour.total_sales) || 0,
+        avg_order_value: parseFloat(hour.avg_order_value) || 0
+      })),
+      payment_methods: paymentMethods.map(method => ({
+        payment_method: method.payment_method || 'unknown',
+        count: parseInt(method.count) || 0,
+        total_amount: parseFloat(method.total_amount) || 0,
+        percentage: summary.total_orders > 0 ? 
+          Math.round((parseInt(method.count) / parseInt(summary.total_orders)) * 100) : 0
+      })),
+      top_items: topItems.map(item => ({
+        name: item.name || 'Unknown Item',
+        quantity_sold: parseInt(item.quantity_sold) || 0,
+        revenue: parseFloat(item.revenue) || 0
+      })),
+      top_tables: topTables.map(table => ({
+        table_number: table.table_number || 'Takeaway',
+        order_count: parseInt(table.order_count) || 0,
+        total_revenue: parseFloat(table.total_revenue) || 0
+      }))
+    };
+    
+  } catch (error) {
+    console.error('Error in getDailySalesReport:', error);
+    throw new Error(`Error getting daily sales report: ${error.message}`);
   }
 }
 

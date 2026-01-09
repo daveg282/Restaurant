@@ -420,6 +420,46 @@ static async generateReceiptHTML(req, res) {
     res.status(500).send(`<h1>Error generating receipt</h1><p>${error.message}</p>`);
   }
 }
+static async getSalesSummary(req, res) {
+  try {
+    const filters = {
+      period: req.query.period || 'today',
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
+      date: req.query.date
+    };
+    
+    console.log('BillingController: Getting sales summary with filters:', filters);
+    
+    const summary = await Order.getSalesSummary(filters);
+    
+    res.json(summary);
+  } catch (error) {
+    console.error('BillingController Error in getSalesSummary:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+// Get daily sales report
+static async getDailySalesReport(req, res) {
+  try {
+    const date = req.query.date || null;
+    console.log('BillingController: Getting daily report for date:', date);
+    
+    const report = await Order.getDailySalesReport(date);
+    
+    res.json(report);
+  } catch (error) {
+    console.error('BillingController Error in getDailySalesReport:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
 }
 
 module.exports = BillingController;
