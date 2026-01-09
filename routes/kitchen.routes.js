@@ -7,21 +7,21 @@ const { authorizeRole } = require('../middleware/roleAuth');
 // ========== KITCHEN ROUTES (Chef/Manager/Admin only) ==========
 
 // Get all kitchen orders
-router.get('/orders', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), KitchenController.getKitchenOrders);
+router.get('/orders', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.getKitchenOrders);
 
 // Get urgent orders (over 20 minutes)
-router.get('/orders/urgent', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), KitchenController.getUrgentOrders);
+router.get('/orders/urgent', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.getUrgentOrders);
 
 // Get orders by station
-router.get('/station/:station', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), KitchenController.getOrdersByStation);
+router.get('/station/:station', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.getOrdersByStation);
 
 // Update item status
-router.patch('/items/:id/status', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), KitchenController.updateOrderStatus);
+router.patch('/items/:id/status', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.updateOrderStatus);
 
 // Mark entire order as ready
-router.patch('/orders/:id/ready', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), KitchenController.markOrderReady);
+router.patch('/orders/:id/ready', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.markOrderReady);
 
 // Kitchen statistics
-router.get('/stats', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), KitchenController.getKitchenStats);
+router.get('/stats', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.getKitchenStats);
 
 module.exports = router;
