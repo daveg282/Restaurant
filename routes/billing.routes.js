@@ -24,9 +24,9 @@ router.get('/sales/summary', authenticateToken, authorizeRole(['cashier', 'admin
 // Get daily sales report
 router.get('/orders/:id/receipt/html', authenticateToken, BillingController.generateReceiptHTML);
 
-router.get('/sales/summary', authenticateToken, authorizeRole(['cashier', 'admin', 'manager']), BillingController.getSalesSummary);
-
 // Get daily sales report
 router.get('/sales/daily', authenticateToken, authorizeRole(['cashier', 'admin', 'manager']), BillingController.getDailySalesReport);
 
+// In billing.routes.js - Add new route
+router.get('/payments/report', authenticateToken, authorizeRole(['admin', 'manager', 'cashier']), BillingController.getPaymentReport);
 module.exports = router;

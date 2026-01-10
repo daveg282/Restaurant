@@ -97,33 +97,34 @@ class OrderController {
 
   // Get all orders
   static async getAllOrders(req, res) {
-    try {
-      const filters = {
-        status: req.query.status,
-        table_id: req.query.table_id,
-        waiter_id: req.query.waiter_id,
-        payment_status: req.query.payment_status,
-        start_date: req.query.start_date,
-        end_date: req.query.end_date,
-        limit: req.query.limit ? parseInt(req.query.limit) : null
-      };
+  try {
+    const filters = {
+      status: req.query.status,
+      table_id: req.query.table_id,
+      waiter_id: req.query.waiter_id,
+      payment_status: req.query.payment_status,
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
+      limit: req.query.limit ? parseInt(req.query.limit) : null
+    };
 
-      const orders = await Order.getAll(filters);
+    // This now returns orders WITH items
+    const orders = await Order.getAll(filters);
 
-      res.json({
-        success: true,
-        orders,
-        count: orders.length
-      });
-    } catch (error) {
-      console.error('Get all orders error:', error);
-      res.status(500).json({
-        success: false,
-        error: error.message || 'Server error getting orders'
-      });
-    }
+    res.json({
+      success: true,
+      orders,
+      count: orders.length
+    });
+    
+  } catch (error) {
+    console.error('Get all orders error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error getting orders'
+    });
   }
-
+}
   // Get order by ID
   static async getOrder(req, res) {
     try {

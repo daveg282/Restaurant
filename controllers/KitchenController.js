@@ -25,7 +25,7 @@ class KitchenController {
         });
       }
       
-      const result = await Order.updateItemStatus(id, status);
+      const result = await Order.updateStatus(id, status);
       res.json({ success: true, message: result.message });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });

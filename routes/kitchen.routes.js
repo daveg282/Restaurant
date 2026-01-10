@@ -16,7 +16,7 @@ router.get('/orders/urgent', authenticateToken, authorizeRole(['chef', 'admin', 
 router.get('/station/:station', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.getOrdersByStation);
 
 // Update item status
-router.patch('/items/:id/status', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.updateOrderStatus);
+router.patch('/items/:id/status', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.updateItemStatus);
 
 // Mark entire order as ready
 router.patch('/orders/:id/ready', authenticateToken, authorizeRole(['chef', 'admin', 'manager', 'cashier']), KitchenController.markOrderReady);

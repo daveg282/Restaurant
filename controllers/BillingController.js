@@ -326,8 +326,8 @@ static async generateReceiptHTML(req, res) {
 <body>
     <div class="receipt">
         <div class="header">
-            <h1 class="restaurant-name">🍽️ RESTAURANT ERP</h1>
-            <p>123 Restaurant Street</p>
+            <h1 class="restaurant-name">KUKU CHICKEN</h1>
+            <p>DIRE DIWA ADDIS ABABA</p>
             <p>Phone: (555) 123-4567</p>
             <div class="receipt-number">
                 <strong>RECEIPT #${order.order_number}</strong>
@@ -457,6 +457,108 @@ static async getDailySalesReport(req, res) {
     res.status(500).json({
       success: false,
       error: error.message
+    });
+  }
+}
+// In BillingController.js - Add new method
+static async getPaymentReport(req, res) {
+  try {
+    const { 
+      start_date, 
+      end_date,
+      payment_method,
+      cashier_id,
+      min_amount,
+      max_amount
+    } = req.query;
+    
+    let whereClause = 'WHERE payment_status = "paid" AND payment_time IS NOT NULL';
+    const params = [];
+    
+    if (start_date && end_date) {
+      whereClause += ' AND DATE(payment_time) BETWEEN ? AND ?';
+      params.push(start_date, end_date);
+    } else if (start_date) {
+      whereClause += ' AND DATE(payment_time) >= ?';
+      params.push(start_date);
+    }
+    
+    if (payment_method) {
+      whereClause += ' AND payment_method = ?';
+      params.push(payment_method);
+    }
+    
+    if (cashier_id) {
+      whereClause += ' AND cashier_id = ?';
+      params.push(cashier_id);
+    }
+    
+    if (min_amount) {
+      whereClause += ' AND total_amount >= ?';
+      params.push(parseFloat(min_amount));
+    }
+    
+    if (max_amount) {
+      whereClause += ' AND total_amount <= ?';
+      params.push(parseFloat(max_amount));
+    }
+    
+    const sql = `
+      SELECT 
+        o.id,
+        o.order_number,
+        o.total_amount,
+        o.tax,
+        o.tip,
+        o.discount,
+        o.payment_method,
+        DATE_FORMAT(o.order_time, '%Y-%m-%d %H:%i') as order_time,
+        DATE_FORMAT(o.payment_time, '%Y-%m-%d %H:%i') as payment_time,
+        TIMESTAMPDIFF(MINUTE, o.order_time, o.payment_time) as minutes_to_pay,
+        COALESCE(t.table_number, 'Takeaway') as table_number,
+        o.customer_name,
+        w.username as waiter_name,
+        c.username as cashier_name
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      LEFT JOIN users w ON o.waiter_id = w.id
+      LEFT JOIN users c ON o.cashier_id = c.id
+      ${whereClause}
+      ORDER BY o.payment_time DESC
+    `;
+    
+    const payments = await db.query(sql, params);
+    
+    // Calculate summary
+    const summary = {
+      total_payments: payments.length,
+      total_amount: payments.reduce((sum, p) => sum + parseFloat(p.total_amount), 0),
+      total_tax: payments.reduce((sum, p) => sum + parseFloat(p.tax || 0), 0),
+      total_tip: payments.reduce((sum, p) => sum + parseFloat(p.tip || 0), 0),
+      total_discount: payments.reduce((sum, p) => sum + parseFloat(p.discount || 0), 0),
+      avg_minutes_to_pay: payments.length > 0 ? 
+        payments.reduce((sum, p) => sum + (p.minutes_to_pay || 0), 0) / payments.length : 0
+    };
+    
+    res.json({
+      success: true,
+      summary,
+      payments,
+      filters: {
+        start_date,
+        end_date,
+        payment_method,
+        cashier_id,
+        min_amount,
+        max_amount
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get payment report error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error getting payment report'
     });
   }
 }
