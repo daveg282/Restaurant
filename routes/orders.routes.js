@@ -15,7 +15,7 @@ router.get('/number/:order_number', OrderController.getOrderByNumber);
 router.post('/', authenticateToken, authorizeRole(['waiter', 'cashier', 'admin', 'manager']), OrderController.createOrder);
 
 // Get all orders (admin/manager/cashier)
-router.get('/', authenticateToken, authorizeRole(['admin', 'manager', 'cashier']), OrderController.getAllOrders);
+router.get('/', authenticateToken, authorizeRole(['admin', 'manager', 'cashier', 'chef']), OrderController.getAllOrders);
 
 // Get waiter's own orders
 router.get('/waiter/active', authenticateToken, authorizeRole(['waiter']), OrderController.getWaiterOrders);
