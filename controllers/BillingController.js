@@ -243,14 +243,28 @@ static async generateReceiptHTML(req, res) {
       return res.status(404).json({ success: false, error: 'Order not found' });
     }
 
-    // Calculate totals
+    // Calculate totals with VAT
     const subtotal = parseFloat(order.total_amount);
-    const tax = parseFloat(order.tax || 0);
+    const VAT_RATE = 0.15;
+    const vatAmount = subtotal * VAT_RATE;
+    const totalWithVAT = subtotal + vatAmount;
     const tip = parseFloat(order.tip || 0);
     const discount = parseFloat(order.discount || 0);
-    const total = subtotal + tax + tip - discount;
+    const finalTotal = totalWithVAT + tip - discount;
 
-    // Generate HTML receipt
+    // Get table information
+    let tableInfo = 'Takeaway';
+    if (order.table) {
+      if (typeof order.table === 'object') {
+        tableInfo = order.table.name || order.table.number || JSON.stringify(order.table);
+      } else {
+        tableInfo = order.table;
+      }
+    } else if (order.table_number) {
+      tableInfo = order.table_number;
+    }
+
+    // Generate HTML receipt matching frontend format
     const htmlReceipt = `
 <!DOCTYPE html>
 <html>
@@ -259,9 +273,9 @@ static async generateReceiptHTML(req, res) {
     <style>
         body {
             font-family: 'Courier New', monospace;
+            padding: 20px;
             max-width: 400px;
             margin: 0 auto;
-            padding: 20px;
             background: white;
         }
         .receipt {
@@ -279,37 +293,51 @@ static async generateReceiptHTML(req, res) {
             font-size: 24px;
             font-weight: bold;
             margin: 0;
+            text-transform: uppercase;
         }
-        .receipt-number {
-            font-size: 18px;
-            margin: 10px 0;
-        }
-        .details {
-            margin: 20px 0;
+        .restaurant-address {
+            font-size: 14px;
+            margin: 5px 0;
+            text-transform: uppercase;
         }
         .row {
             display: flex;
             justify-content: space-between;
             margin: 8px 0;
+            padding: 4px 0;
         }
         .items-table {
             width: 100%;
             border-collapse: collapse;
-            margin: 20px 0;
+            margin: 15px 0;
         }
         .items-table th {
-            border-bottom: 1px solid #000;
-            padding: 10px 0;
             text-align: left;
+            border-bottom: 1px solid #000;
+            padding: 8px 0;
+            font-weight: bold;
         }
         .items-table td {
-            padding: 8px 0;
+            padding: 6px 0;
             border-bottom: 1px dashed #ccc;
+        }
+        .items-table tr:last-child td {
+            border-bottom: none;
         }
         .total-section {
             border-top: 2px solid #000;
             margin-top: 20px;
             padding-top: 15px;
+        }
+        .highlight {
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .payment-info {
+            background-color: #f5f5f5;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
         }
         .footer {
             text-align: center;
@@ -317,9 +345,22 @@ static async generateReceiptHTML(req, res) {
             font-size: 12px;
             color: #666;
         }
-        .highlight {
+        .vat-note {
+            font-size: 10px;
+            color: #666;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .section-title {
             font-weight: bold;
-            font-size: 18px;
+            margin: 15px 0 8px 0;
+            font-size: 16px;
+        }
+        .amount-positive {
+            color: #28a745;
+        }
+        .amount-negative {
+            color: #dc3545;
         }
     </style>
 </head>
@@ -327,29 +368,27 @@ static async generateReceiptHTML(req, res) {
     <div class="receipt">
         <div class="header">
             <h1 class="restaurant-name">KUKU CHICKEN</h1>
-            <p>DIRE DIWA ADDIS ABABA</p>
+            <p class="restaurant-address">DIRE DIWA ADDIS ABABA</p>
             <p>Phone: (555) 123-4567</p>
-            <div class="receipt-number">
-                <strong>RECEIPT #${order.order_number}</strong>
-            </div>
-            <p>Date: ${new Date(order.order_time).toLocaleString()}</p>
+            <p><strong>RECEIPT #${order.order_number}</strong></p>
+            <p>Date: ${new Date(order.order_time || Date.now()).toLocaleString()}</p>
         </div>
         
-        <div class="details">
-            <div class="row">
-                <span>Customer:</span>
-                <span><strong>${order.customer_name}</strong></span>
-            </div>
-            <div class="row">
-                <span>Table:</span>
-                <span>${order.table_number || 'N/A'}</span>
-            </div>
-            <div class="row">
-                <span>Cashier:</span>
-                <span>${order.cashier_name || 'System'}</span>
-            </div>
+        <div class="section-title">ORDER DETAILS</div>
+        <div class="row">
+            <span>Customer:</span>
+            <span><strong>${order.customer_name || 'Walk-in Customer'}</strong></span>
+        </div>
+        <div class="row">
+            <span>Table:</span>
+            <span><strong>${tableInfo}</strong></span>
+        </div>
+        <div class="row">
+            <span>Cashier:</span>
+            <span>${order.cashier_name || 'System'}</span>
         </div>
         
+        <div class="section-title">ORDER ITEMS</div>
         <table class="items-table">
             <thead>
                 <tr>
@@ -360,64 +399,89 @@ static async generateReceiptHTML(req, res) {
                 </tr>
             </thead>
             <tbody>
-                ${order.items.map(item => `
-                <tr>
-                    <td>${item.menu_item_name}</td>
-                    <td>${item.quantity}</td>
-                    <td>$${parseFloat(item.price).toFixed(2)}</td>
-                    <td>$${(item.quantity * item.price).toFixed(2)}</td>
-                </tr>
-                `).join('')}
+                ${order.items && order.items.length > 0 ? 
+                  order.items.map(item => `
+                    <tr>
+                        <td>${item.menu_item_name || item.name || 'Item'}</td>
+                        <td>${item.quantity || 1}</td>
+                        <td>${(item.price || 0).toFixed(2)} ETB</td>
+                        <td>${((item.price || 0) * (item.quantity || 1)).toFixed(2)} ETB</td>
+                    </tr>
+                  `).join('') : 
+                  '<tr><td colspan="4" style="text-align: center;">No items found</td></tr>'
+                }
             </tbody>
         </table>
         
         <div class="total-section">
             <div class="row">
                 <span>Subtotal:</span>
-                <span>$${subtotal.toFixed(2)}</span>
+                <span>${subtotal.toFixed(2)} ETB</span>
             </div>
             <div class="row">
-                <span>Tax:</span>
-                <span>$${tax.toFixed(2)}</span>
+                <span>VAT (15%):</span>
+                <span>${vatAmount.toFixed(2)} ETB</span>
             </div>
-            <div class="row">
-                <span>Tip:</span>
-                <span>$${tip.toFixed(2)}</span>
-            </div>
-            <div class="row">
-                <span>Discount:</span>
-                <span>-$${discount.toFixed(2)}</span>
-            </div>
+            ${tip > 0 ? `
+                <div class="row">
+                    <span>Tip:</span>
+                    <span class="amount-positive">+${tip.toFixed(2)} ETB</span>
+                </div>
+            ` : ''}
+            ${discount > 0 ? `
+                <div class="row">
+                    <span>Discount:</span>
+                    <span class="amount-negative">-${discount.toFixed(2)} ETB</span>
+                </div>
+            ` : ''}
             <div class="row highlight">
-                <span>TOTAL:</span>
-                <span>$${total.toFixed(2)}</span>
+                <span>FINAL TOTAL:</span>
+                <span>${finalTotal.toFixed(2)} ETB</span>
             </div>
+        </div>
+        
+        <div class="payment-info">
+            <div class="section-title">PAYMENT INFORMATION</div>
             <div class="row">
                 <span>Payment Method:</span>
-                <span><strong>${order.payment_method.toUpperCase()}</strong></span>
+                <span><strong>${(order.payment_method || 'CASH').toUpperCase()}</strong></span>
             </div>
             <div class="row">
                 <span>Payment Status:</span>
-                <span><strong style="color: green;">${order.payment_status.toUpperCase()}</strong></span>
+                <span style="color: #28a745; font-weight: bold;">${(order.payment_status || 'PAID').toUpperCase()}</span>
+            </div>
+            <div class="row">
+                <span>Transaction Time:</span>
+                <span>${new Date(order.payment_time || Date.now()).toLocaleTimeString()}</span>
             </div>
         </div>
         
         <div class="footer">
             <p>Thank you for dining with us!</p>
-            <p>Please keep this receipt for your records</p>
-            <p>Order #${order.order_number}</p>
+            <p class="vat-note">VAT included at 15% | TIN: 0000000</p>
         </div>
     </div>
+    
+    <script>
+        // Auto-print after loading
+        setTimeout(() => {
+            window.print();
+        }, 500);
+    </script>
 </body>
 </html>`;
 
-    // Set content type to HTML
+    // Set content type and send HTML
     res.setHeader('Content-Type', 'text/html');
     res.send(htmlReceipt);
 
   } catch (error) {
-    console.error('Generate receipt HTML error:', error);
-    res.status(500).send(`<h1>Error generating receipt</h1><p>${error.message}</p>`);
+    console.error('Error generating receipt HTML:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to generate receipt',
+      details: error.message 
+    });
   }
 }
 static async getSalesSummary(req, res) {
