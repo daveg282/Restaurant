@@ -4,7 +4,6 @@ const Ingredient = require('../models/Ingredient');
 class ReportController {
   // ========== DASHBOARD ENDPOINTS ==========
 
-  // Get comprehensive dashboard data
   static async getDashboardData(req, res) {
     try {
       const userRole = req.user.role;
@@ -22,8 +21,8 @@ class ReportController {
       lastMonthRange.startDate.setMonth(lastMonthRange.startDate.getMonth() - 1);
       lastMonthRange.endDate.setMonth(lastMonthRange.endDate.getMonth() - 1);
 
-      // Get performance data
-      const [todayStats, yesterdayStats, weekStats, lastWeekStats, monthStats, lastMonthStats, staffPerformance, popularItems, inventoryAlerts] = await Promise.all([
+      // FIXED: Changed getLowStockAlerts() to getLowStock()
+      const [todayStats, yesterdayStats, weekStats, lastWeekStats, monthStats, lastMonthStats, staffPerformance, popularItems, lowStockItems] = await Promise.all([
         ReportModel.getSalesSummary(todayRange.startDate, todayRange.endDate),
         ReportModel.getSalesSummary(yesterdayRange.startDate, yesterdayRange.endDate),
         ReportModel.getSalesSummary(weekRange.startDate, weekRange.endDate),
@@ -32,7 +31,7 @@ class ReportController {
         ReportModel.getSalesSummary(lastMonthRange.startDate, lastMonthRange.endDate),
         ReportModel.getStaffPerformance(weekRange.startDate, weekRange.endDate),
         ReportModel.getTopSellingItems(weekRange.startDate, weekRange.endDate, 5),
-        Ingredient.getLowStockAlerts()
+        Ingredient.getLowStock()  // CHANGED HERE
       ]);
 
       // Format performance stats
@@ -51,7 +50,7 @@ class ReportController {
           performance_stats: performanceStats,
           staff_performance: staffPerformance,
           popular_items: popularItems,
-          recent_alerts: ReportController.formatAlerts(inventoryAlerts, userRole),
+          recent_alerts: ReportController.formatAlerts(lowStockItems, userRole),  // CHANGED HERE
           quick_stats: quickStats,
           user_role: userRole,
           generated_at: new Date().toISOString()
@@ -64,6 +63,74 @@ class ReportController {
         error: error.message 
       });
     }
+  }
+
+  // ========== INVENTORY REPORT ENDPOINTS ==========
+
+  static async getInventoryReport(req, res) {
+    try {
+      const { detailed } = req.query;
+      
+      // FIXED: Changed getLowStockAlerts() to getLowStock()
+      const [inventoryMetrics, lowStockItems] = await Promise.all([
+        ReportModel.getInventoryMetrics(),
+        Ingredient.getLowStock()  // CHANGED HERE
+      ]);
+
+      const report = {
+        summary: inventoryMetrics,
+        low_stock_alerts: lowStockItems,  // CHANGED HERE
+        generated_at: new Date().toISOString()
+      };
+
+      // Add detailed info if requested
+      if (detailed === 'true') {
+        const ingredients = await Ingredient.getAll({});
+        report.detailed_ingredients = ingredients;
+      }
+
+      res.json({
+        success: true,
+        data: report
+      });
+    } catch (error) {
+      console.error('Inventory report error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  // ========== HELPER METHODS ==========
+
+  static formatAlerts(lowStockItems, userRole) {
+    const alerts = [];
+
+    // Add inventory alerts
+    if (lowStockItems && lowStockItems.length > 0) {
+      lowStockItems.slice(0, 3).forEach(item => {
+        alerts.push({
+          id: `stock-${item.id}`,
+          type: 'inventory',
+          severity: item.current_stock === 0 ? 'critical' : 'warning',
+          title: 'Low Stock Alert',
+          message: `${item.name} is ${item.current_stock === 0 ? 'out of stock' : 'low on stock'}`,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+      });
+    }
+
+    // Add system alerts for admin/manager
+    if (['admin', 'manager'].includes(userRole)) {
+      alerts.push({
+        id: 'system-check',
+        type: 'system',
+        severity: 'info',
+        title: 'Daily Report Ready',
+        message: 'Daily sales report has been generated',
+        time: 'Just now'
+      });
+    }
+
+    return alerts;
   }
 
   // ========== SALES REPORT ENDPOINTS ==========
@@ -269,39 +336,7 @@ class ReportController {
     }
   }
 
-  // ========== INVENTORY REPORT ENDPOINTS ==========
-
-  static async getInventoryReport(req, res) {
-    try {
-      const { detailed } = req.query;
-      
-      const [inventoryMetrics, lowStockAlerts] = await Promise.all([
-        ReportModel.getInventoryMetrics(),
-        Ingredient.getLowStockAlerts()
-      ]);
-
-      const report = {
-        summary: inventoryMetrics,
-        low_stock_alerts: lowStockAlerts,
-        generated_at: new Date().toISOString()
-      };
-
-      // Add detailed info if requested
-      if (detailed === 'true') {
-        const ingredients = await Ingredient.getAll({});
-        report.detailed_ingredients = ingredients;
-      }
-
-      res.json({
-        success: true,
-        data: report
-      });
-    } catch (error) {
-      console.error('Inventory report error:', error);
-      res.status(500).json({ success: false, error: error.message });
-    }
-  }
-
+ 
   // ========== HELPER METHODS ==========
 
   static async getSalesReportForPeriod(startDate, endDate) {
@@ -358,38 +393,6 @@ class ReportController {
         ...calculateChange(currentStats.tables_served || 0, previousStats.tables_served || 0)
       }
     };
-  }
-
-  static formatAlerts(inventoryAlerts, userRole) {
-    const alerts = [];
-
-    // Add inventory alerts
-    if (inventoryAlerts && inventoryAlerts.length > 0) {
-      inventoryAlerts.slice(0, 3).forEach(item => {
-        alerts.push({
-          id: `stock-${item.id}`,
-          type: 'inventory',
-          severity: item.stock_level === 'Out of Stock' ? 'critical' : 'warning',
-          title: 'Low Stock Alert',
-          message: `${item.name} is ${item.stock_level?.toLowerCase() || 'low on stock'}`,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        });
-      });
-    }
-
-    // Add system alerts for admin/manager
-    if (['admin', 'manager'].includes(userRole)) {
-      alerts.push({
-        id: 'system-check',
-        type: 'system',
-        severity: 'info',
-        title: 'Daily Report Ready',
-        message: 'Daily sales report has been generated',
-        time: 'Just now'
-      });
-    }
-
-    return alerts;
   }
 
   static getQuickStats() {
