@@ -55,8 +55,8 @@ class Table {
     try {
       const sql = `
         INSERT INTO tables 
-        (table_number, capacity, status, customer_count, section, notes) 
-        VALUES (?, ?, ?, ?, ?, ?)
+        (table_number, capacity, status, customer_count, section) 
+        VALUES (?, ?, ?, ?, ?)
       `;
       
       const params = [
@@ -64,8 +64,7 @@ class Table {
         tableData.capacity || 2,
         tableData.status || 'available',
         tableData.customer_count || 0,
-        tableData.section || 'Main Hall',
-        tableData.notes || ''
+        tableData.section || 'Main Hall'
       ];
       
       const result = await db.execute(sql, params);
