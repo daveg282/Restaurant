@@ -3,32 +3,36 @@ const db = require('../config/db');
 class ReportModel {
   // ========== SALES QUERIES ==========
   
-  static async getSalesSummary(startDate, endDate) {
-    try {
-      const result = await db.queryOne(`
-        SELECT 
-          COUNT(DISTINCT id) as total_orders,
-          COUNT(DISTINCT customer_name) as total_customers,
-          COALESCE(SUM(total_amount), 0) as total_sales,
-          COALESCE(AVG(total_amount), 0) as average_order_value,
-          COALESCE(COUNT(DISTINCT table_id), 0) as tables_served
-        FROM orders 
-        WHERE status = 'completed'
-          AND order_time BETWEEN ? AND ?
-      `, [startDate, endDate]);
+ static async getSalesSummary(startDate, endDate) {
+  try {
+    console.log('Sales summary query dates:', startDate.toISOString(), 'to', endDate.toISOString());
+    
+    const result = await db.queryOne(`
+      SELECT 
+        COUNT(DISTINCT id) as total_orders,
+        COUNT(DISTINCT customer_name) as total_customers,
+        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(AVG(total_amount), 0) as average_order_value,
+        COALESCE(COUNT(DISTINCT table_id), 0) as tables_served
+      FROM orders 
+      WHERE payment_status = 'paid'  -- CHANGED FROM status = 'completed'
+        AND order_time BETWEEN ? AND ?
+    `, [startDate, endDate]);
 
-      return {
-        total_orders: parseInt(result.total_orders || 0),
-        total_customers: parseInt(result.total_customers || 0),
-        total_sales: parseFloat(result.total_sales || 0),
-        average_order_value: parseFloat(result.average_order_value || 0),
-        tables_served: parseInt(result.tables_served || 0)
-      };
-    } catch (error) {
-      console.error('Get sales summary error:', error);
-      return this.getEmptySalesSummary();
-    }
+    console.log('Sales summary result:', result);
+    
+    return {
+      total_orders: parseInt(result.total_orders || 0),
+      total_customers: parseInt(result.total_customers || 0),
+      total_sales: parseFloat(result.total_sales || 0),
+      average_order_value: parseFloat(result.average_order_value || 0),
+      tables_served: parseInt(result.tables_served || 0)
+    };
+  } catch (error) {
+    console.error('Get sales summary error:', error);
+    return this.getEmptySalesSummary();
   }
+}
 
   static async getSalesByTimePeriod(startDate, endDate, groupBy = 'day') {
     let groupByClause;
@@ -108,39 +112,43 @@ class ReportModel {
   }
 
   static async getTopSellingItems(startDate, endDate, limit = 10) {
-    try {
-      const results = await db.query(`
-        SELECT 
-          mi.id,
-          mi.name,
-          c.name as category_name,
-          COUNT(oi.id) as order_count,
-          SUM(oi.quantity) as total_quantity,
-          SUM(oi.quantity * mi.price) as total_revenue
-        FROM order_items oi
-        JOIN menu_items mi ON oi.menu_item_id = mi.id
-        LEFT JOIN categories c ON mi.category_id = c.id
-        JOIN orders o ON oi.order_id = o.id
-        WHERE o.status = 'completed'
-          AND o.order_time BETWEEN ? AND ?
-        GROUP BY mi.id, mi.name, c.name
-        ORDER BY total_quantity DESC
-        LIMIT ?
-      `, [startDate, endDate, limit]);
+  try {
+    console.log('Popular items query dates:', startDate.toISOString(), 'to', endDate.toISOString());
+    
+    const results = await db.query(`
+      SELECT 
+        mi.id,
+        mi.name,
+        c.name as category_name,
+        COUNT(oi.id) as order_count,
+        SUM(oi.quantity) as total_quantity,
+        SUM(oi.quantity * mi.price) as total_revenue
+      FROM order_items oi
+      JOIN menu_items mi ON oi.menu_item_id = mi.id
+      LEFT JOIN categories c ON mi.category_id = c.id
+      JOIN orders o ON oi.order_id = o.id
+      WHERE o.payment_status = 'paid'  -- CHANGED FROM status = 'completed'
+        AND o.order_time BETWEEN ? AND ?
+      GROUP BY mi.id, mi.name, c.name
+      ORDER BY total_quantity DESC
+      LIMIT ?
+    `, [startDate, endDate, limit]);
 
-      return results.map(row => ({
-        id: row.id,
-        name: row.name,
-        category: row.category_name,
-        order_count: parseInt(row.order_count || 0),
-        total_quantity: parseInt(row.total_quantity || 0),
-        total_revenue: parseFloat(row.total_revenue || 0)
-      }));
-    } catch (error) {
-      console.error('Get top selling items error:', error);
-      return [];
-    }
+    console.log('Popular items found:', results.length);
+    
+    return results.map(row => ({
+      id: row.id,
+      name: row.name,
+      category: row.category_name,
+      order_count: parseInt(row.order_count || 0),
+      total_quantity: parseInt(row.total_quantity || 0),
+      total_revenue: parseFloat(row.total_revenue || 0)
+    }));
+  } catch (error) {
+    console.error('Get top selling items error:', error);
+    return [];
   }
+}
 
   static async getPaymentMethodBreakdown(startDate, endDate) {
     try {
@@ -170,51 +178,55 @@ class ReportModel {
   // ========== STAFF PERFORMANCE QUERIES ==========
 
   static async getStaffPerformance(startDate, endDate) {
-    try {
-      const results = await db.query(`
-        SELECT 
-          u.id,
-          u.first_name,
-          u.last_name,
-          u.role,
-          COUNT(DISTINCT o.id) as orders_handled,
-          COALESCE(SUM(o.total_amount), 0) as total_sales,
-          COUNT(DISTINCT o.table_id) as tables_served,
-          COUNT(DISTINCT o.customer_name) as customers_served,
-          COALESCE(AVG(o.total_amount), 0) as avg_order_value
-        FROM users u
-        LEFT JOIN orders o ON u.id = o.waiter_id 
-          AND o.status = 'completed'
-          AND o.order_time BETWEEN ? AND ?
-        WHERE u.role IN ('waiter', 'chef', 'cashier')
-          AND u.status = 'active'
-        GROUP BY u.id, u.first_name, u.last_name, u.role
-        ORDER BY total_sales DESC
-      `, [startDate, endDate]);
+  try {
+    console.log('Staff performance query dates:', startDate.toISOString(), 'to', endDate.toISOString());
+    
+    const results = await db.query(`
+      SELECT 
+        u.id,
+        u.first_name,
+        u.last_name,
+        u.role,
+        COUNT(DISTINCT o.id) as orders_handled,
+        COALESCE(SUM(o.total_amount), 0) as total_sales,
+        COUNT(DISTINCT o.table_id) as tables_served,
+        COUNT(DISTINCT o.customer_name) as customers_served,
+        COALESCE(AVG(o.total_amount), 0) as avg_order_value
+      FROM users u
+      LEFT JOIN orders o ON u.id = o.waiter_id 
+        AND o.payment_status = 'paid'  -- CHANGED FROM status = 'completed'
+        AND o.order_time BETWEEN ? AND ?
+      WHERE u.role IN ('waiter', 'chef', 'cashier', 'manager')
+        AND u.status = 'active'
+      GROUP BY u.id, u.first_name, u.last_name, u.role
+      ORDER BY total_sales DESC
+    `, [startDate, endDate]);
 
-      return results.map(row => {
-        const fullName = `${row.first_name} ${row.last_name}`;
-        const shortName = `${row.first_name} ${row.last_name.charAt(0)}.`;
-        const avatar = `${row.first_name.charAt(0)}${row.last_name.charAt(0)}`;
-        
-        return {
-          id: row.id,
-          name: shortName,
-          fullName: fullName,
-          role: row.role,
-          avatar: avatar,
-          orders_handled: parseInt(row.orders_handled || 0),
-          total_sales: parseFloat(row.total_sales || 0),
-          tables_served: parseInt(row.tables_served || 0),
-          customers_served: parseInt(row.customers_served || 0),
-          avg_order_value: parseFloat(row.avg_order_value || 0)
-        };
-      });
-    } catch (error) {
-      console.error('Get staff performance error:', error);
-      return [];
-    }
+    console.log('Staff performance results count:', results.length);
+    
+    return results.map(row => {
+      const fullName = `${row.first_name} ${row.last_name}`;
+      const shortName = `${row.first_name} ${row.last_name.charAt(0)}.`;
+      const avatar = `${row.first_name.charAt(0)}${row.last_name.charAt(0)}`;
+      
+      return {
+        id: row.id,
+        name: shortName,
+        fullName: fullName,
+        role: row.role,
+        avatar: avatar,
+        orders_handled: parseInt(row.orders_handled || 0),
+        total_sales: parseFloat(row.total_sales || 0),
+        tables_served: parseInt(row.tables_served || 0),
+        customers_served: parseInt(row.customers_served || 0),
+        avg_order_value: parseFloat(row.avg_order_value || 0)
+      };
+    });
+  } catch (error) {
+    console.error('Get staff performance error:', error);
+    return [];
   }
+}
 
   // ========== INVENTORY QUERIES ==========
 
@@ -319,6 +331,55 @@ class ReportModel {
 
     return { startDate, endDate };
   }
+  // Add this method to ReportModel.js
+static async getRecentOrders(limit = 5) {
+  try {
+    console.log('Recent orders query - last 24 hours');
+    
+    const results = await db.query(`
+      SELECT 
+        o.id,
+        o.order_number,
+        o.customer_name,
+        o.table_id,
+        o.total_amount,
+        o.status,
+        o.payment_status,
+        o.order_time,
+        o.payment_method,
+        t.table_number,
+        u.first_name as waiter_first_name,
+        u.last_name as waiter_last_name
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      LEFT JOIN users u ON o.waiter_id = u.id
+      WHERE o.order_time >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+        AND o.payment_status = 'paid'
+      ORDER BY o.order_time DESC
+      LIMIT ?
+    `, [limit]);
+
+    console.log('Recent orders found:', results.length);
+    
+    return results.map(row => ({
+      id: row.id,
+      order_number: row.order_number || `ORD-${row.id}`,
+      customer_name: row.customer_name || 'Walk-in',
+      table_number: row.table_number || row.table_id || 'Takeaway',
+      total_amount: parseFloat(row.total_amount || 0),
+      status: row.status || 'pending',
+      payment_status: row.payment_status || 'pending',
+      payment_method: row.payment_method || 'cash',
+      order_time: row.order_time,
+      waiter_name: row.waiter_first_name ? 
+        `${row.waiter_first_name} ${row.waiter_last_name}` : 'Not assigned'
+    }));
+  } catch (error) {
+    console.error('Get recent orders error:', error);
+    return [];
+  }
 }
+}
+
 
 module.exports = ReportModel;

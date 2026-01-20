@@ -4,67 +4,87 @@ const Ingredient = require('../models/Ingredient');
 class ReportController {
   // ========== DASHBOARD ENDPOINTS ==========
 
-  static async getDashboardData(req, res) {
-    try {
-      const userRole = req.user.role;
-      
-      // Get date ranges
-      const todayRange = ReportModel.getDateRange('today');
-      const yesterdayRange = ReportModel.getDateRange('yesterday');
-      const weekRange = ReportModel.getDateRange('week');
-      const lastWeekRange = ReportModel.getDateRange('week');
-      lastWeekRange.startDate.setDate(lastWeekRange.startDate.getDate() - 7);
-      lastWeekRange.endDate.setDate(lastWeekRange.endDate.getDate() - 7);
-      
-      const monthRange = ReportModel.getDateRange('month');
-      const lastMonthRange = ReportModel.getDateRange('month');
-      lastMonthRange.startDate.setMonth(lastMonthRange.startDate.getMonth() - 1);
-      lastMonthRange.endDate.setMonth(lastMonthRange.endDate.getMonth() - 1);
-
-      // FIXED: Changed getLowStockAlerts() to getLowStock()
-      const [todayStats, yesterdayStats, weekStats, lastWeekStats, monthStats, lastMonthStats, staffPerformance, popularItems, lowStockItems] = await Promise.all([
-        ReportModel.getSalesSummary(todayRange.startDate, todayRange.endDate),
-        ReportModel.getSalesSummary(yesterdayRange.startDate, yesterdayRange.endDate),
-        ReportModel.getSalesSummary(weekRange.startDate, weekRange.endDate),
-        ReportModel.getSalesSummary(lastWeekRange.startDate, lastWeekRange.endDate),
-        ReportModel.getSalesSummary(monthRange.startDate, monthRange.endDate),
-        ReportModel.getSalesSummary(lastMonthRange.startDate, lastMonthRange.endDate),
-        ReportModel.getStaffPerformance(weekRange.startDate, weekRange.endDate),
-        ReportModel.getTopSellingItems(weekRange.startDate, weekRange.endDate, 5),
-        Ingredient.getLowStock()  // CHANGED HERE
-      ]);
-
-      // Format performance stats
-      const performanceStats = {
-        today: ReportController.formatPerformanceStats(todayStats, yesterdayStats),
-        week: ReportController.formatPerformanceStats(weekStats, lastWeekStats),
-        month: ReportController.formatPerformanceStats(monthStats, lastMonthStats)
-      };
-
-      // Get quick stats
-      const quickStats = ReportController.getQuickStats();
-
-      res.json({
-        success: true,
-        data: {
-          performance_stats: performanceStats,
-          staff_performance: staffPerformance,
-          popular_items: popularItems,
-          recent_alerts: ReportController.formatAlerts(lowStockItems, userRole),  // CHANGED HERE
-          quick_stats: quickStats,
-          user_role: userRole,
-          generated_at: new Date().toISOString()
-        }
-      });
-    } catch (error) {
-      console.error('Dashboard data error:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
+static async getDashboardData(req, res) {
+  try {
+    const userRole = req.user.role;
+    const { period = 'today' } = req.query; // ADD THIS: Get period from query params
+    
+    console.log('=== DASHBOARD REQUEST ===');
+    console.log('Requested period:', period);
+    console.log('User role:', userRole);
+    
+    // Get date ranges based on requested period
+    let dateRange;
+    let comparisonRange;
+    
+    switch(period) {
+      case 'today':
+        dateRange = ReportModel.getDateRange('today');
+        comparisonRange = ReportModel.getDateRange('yesterday');
+        break;
+      case 'week':
+        dateRange = ReportModel.getDateRange('week');
+        comparisonRange = ReportModel.getDateRange('week');
+        comparisonRange.startDate.setDate(comparisonRange.startDate.getDate() - 7);
+        comparisonRange.endDate.setDate(comparisonRange.endDate.getDate() - 7);
+        break;
+      case 'month':
+        dateRange = ReportModel.getDateRange('month');
+        comparisonRange = ReportModel.getDateRange('month');
+        comparisonRange.startDate.setMonth(comparisonRange.startDate.getMonth() - 1);
+        comparisonRange.endDate.setMonth(comparisonRange.endDate.getMonth() - 1);
+        break;
+      default:
+        dateRange = ReportModel.getDateRange('today');
+        comparisonRange = ReportModel.getDateRange('yesterday');
     }
-  }
+    
+    console.log('Selected period range:', dateRange.startDate, 'to', dateRange.endDate);
+    console.log('Comparison range:', comparisonRange.startDate, 'to', comparisonRange.endDate);
 
+    // Fetch data for selected period and comparison period
+    const [currentStats, comparisonStats, staffPerformance, popularItems, recentOrders] = await Promise.all([
+      ReportModel.getSalesSummary(dateRange.startDate, dateRange.endDate),
+      ReportModel.getSalesSummary(comparisonRange.startDate, comparisonRange.endDate),
+      ReportModel.getStaffPerformance(dateRange.startDate, dateRange.endDate), // Filter staff by selected period
+      ReportModel.getTopSellingItems(dateRange.startDate, dateRange.endDate, 5), // Filter popular items by selected period
+      ReportModel.getRecentOrders(5) // Recent orders always show last 24 hours
+    ]);
+
+    console.log('=== DASHBOARD RESULTS ===');
+    console.log('Current stats:', currentStats);
+    console.log('Comparison stats:', comparisonStats);
+    console.log('Staff count for period:', staffPerformance.length);
+    console.log('Popular items for period:', popularItems.length);
+
+    // Format performance stats for the selected period only
+    const performanceStats = {
+      [period]: ReportController.formatPerformanceStats(currentStats, comparisonStats)
+    };
+
+    // Only include staff with activity in the selected period
+    const activeStaff = staffPerformance.filter(staff => staff.total_sales > 0);
+
+    res.json({
+      success: true,
+      data: {
+        performance_stats: performanceStats, // Only includes selected period
+        staff_performance: activeStaff, // Filtered by period
+        popular_items: popularItems, // Filtered by period
+        recent_orders: recentOrders,
+        user_role: userRole,
+        generated_at: new Date().toISOString(),
+        period: period // Add period to response for debugging
+      }
+    });
+  } catch (error) {
+    console.error('Dashboard data error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+}
   // ========== INVENTORY REPORT ENDPOINTS ==========
 
   static async getInventoryReport(req, res) {
