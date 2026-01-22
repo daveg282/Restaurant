@@ -331,12 +331,9 @@ class ReportModel {
 
     return { startDate, endDate };
   }
- // In Report.js - make sure getRecentOrders accepts parameters
-static async getRecentOrders(startDate, endDate, limit = 5) {
+  // Add this method to ReportModel.js
+static async getRecentOrders(limit = 5) {
   try {
-    console.log('Recent orders query - filtering by date:', 
-      startDate.toISOString(), 'to', endDate.toISOString());
-    
     const results = await db.query(`
       SELECT 
         o.id,
@@ -349,36 +346,36 @@ static async getRecentOrders(startDate, endDate, limit = 5) {
         o.order_time,
         o.payment_method,
         t.table_number,
-        u.first_name as waiter_first_name,
-        u.last_name as waiter_last_name
+        u.first_name AS waiter_first_name,
+        u.last_name AS waiter_last_name
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
-      WHERE o.order_time BETWEEN ? AND ?
+      WHERE o.payment_status = 'paid'
       ORDER BY o.order_time DESC
       LIMIT ?
-    `, [startDate, endDate, limit]);
+    `, [limit]);
 
-    console.log('Recent orders found:', results.length);
-    
     return results.map(row => ({
       id: row.id,
       order_number: row.order_number || `ORD-${row.id}`,
       customer_name: row.customer_name || 'Walk-in',
       table_number: row.table_number || row.table_id || 'Takeaway',
-      total_amount: parseFloat(row.total_amount || 0),
+      total_amount: Number(row.total_amount || 0),
       status: row.status || 'pending',
       payment_status: row.payment_status || 'pending',
       payment_method: row.payment_method || 'cash',
       order_time: row.order_time,
-      waiter_name: row.waiter_first_name ? 
-        `${row.waiter_first_name} ${row.waiter_last_name}` : 'Not assigned'
+      waiter_name: row.waiter_first_name
+        ? `${row.waiter_first_name} ${row.waiter_last_name}`
+        : 'Not assigned'
     }));
   } catch (error) {
     console.error('Get recent orders error:', error);
     return [];
   }
 }
+
 }
 
 

@@ -4,12 +4,10 @@ const Ingredient = require('../models/Ingredient');
 class ReportController {
   // ========== DASHBOARD ENDPOINTS ==========
 
-// ========== DASHBOARD ENDPOINTS ==========
-
 static async getDashboardData(req, res) {
   try {
     const userRole = req.user.role;
-    const { period = 'today' } = req.query;
+    const { period = 'today' } = req.query; // ADD THIS: Get period from query params
     
     console.log('=== DASHBOARD REQUEST ===');
     console.log('Requested period:', period);
@@ -44,13 +42,13 @@ static async getDashboardData(req, res) {
     console.log('Selected period range:', dateRange.startDate, 'to', dateRange.endDate);
     console.log('Comparison range:', comparisonRange.startDate, 'to', comparisonRange.endDate);
 
-    // Fetch data - FIXED: Pass dateRange to getRecentOrders
+    // Fetch data for selected period and comparison period
     const [currentStats, comparisonStats, staffPerformance, popularItems, recentOrders] = await Promise.all([
       ReportModel.getSalesSummary(dateRange.startDate, dateRange.endDate),
       ReportModel.getSalesSummary(comparisonRange.startDate, comparisonRange.endDate),
-      ReportModel.getStaffPerformance(dateRange.startDate, dateRange.endDate),
-      ReportModel.getTopSellingItems(dateRange.startDate, dateRange.endDate, 5),
-      ReportModel.getRecentOrders(dateRange.startDate, dateRange.endDate, 5) // ← FIXED: Added date parameters
+      ReportModel.getStaffPerformance(dateRange.startDate, dateRange.endDate), // Filter staff by selected period
+      ReportModel.getTopSellingItems(dateRange.startDate, dateRange.endDate, 5), // Filter popular items by selected period
+      ReportModel.getRecentOrders(5) // Recent orders always show last 24 hours
     ]);
 
     console.log('=== DASHBOARD RESULTS ===');
@@ -58,7 +56,6 @@ static async getDashboardData(req, res) {
     console.log('Comparison stats:', comparisonStats);
     console.log('Staff count for period:', staffPerformance.length);
     console.log('Popular items for period:', popularItems.length);
-    console.log('Recent orders count:', recentOrders.length); // Add this for debugging
 
     // Format performance stats for the selected period only
     const performanceStats = {
@@ -71,13 +68,13 @@ static async getDashboardData(req, res) {
     res.json({
       success: true,
       data: {
-        performance_stats: performanceStats,
-        staff_performance: activeStaff,
-        popular_items: popularItems,
-        recent_orders: recentOrders, // This should now work
+        performance_stats: performanceStats, // Only includes selected period
+        staff_performance: activeStaff, // Filtered by period
+        popular_items: popularItems, // Filtered by period
+        recent_orders: recentOrders,
         user_role: userRole,
         generated_at: new Date().toISOString(),
-        period: period
+        period: period // Add period to response for debugging
       }
     });
   } catch (error) {
