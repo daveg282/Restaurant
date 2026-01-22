@@ -334,7 +334,7 @@ class ReportModel {
   // Add this method to ReportModel.js
 static async getRecentOrders(limit = 5) {
   try {
-    console.log('Recent orders query - last 24 hours');
+    console.log('Recent orders query - most recent orders');
     
     const results = await db.query(`
       SELECT 
@@ -353,8 +353,6 @@ static async getRecentOrders(limit = 5) {
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
-      WHERE o.order_time >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-        AND o.payment_status = 'paid'
       ORDER BY o.order_time DESC
       LIMIT ?
     `, [limit]);
