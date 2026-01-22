@@ -331,10 +331,11 @@ class ReportModel {
 
     return { startDate, endDate };
   }
-  // Add this method to ReportModel.js
-static async getRecentOrders(limit = 5) {
+ // In Report.js - make sure getRecentOrders accepts parameters
+static async getRecentOrders(startDate, endDate, limit = 5) {
   try {
-    console.log('Recent orders query - most recent orders');
+    console.log('Recent orders query - filtering by date:', 
+      startDate.toISOString(), 'to', endDate.toISOString());
     
     const results = await db.query(`
       SELECT 
@@ -353,9 +354,10 @@ static async getRecentOrders(limit = 5) {
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
+      WHERE o.order_time BETWEEN ? AND ?
       ORDER BY o.order_time DESC
       LIMIT ?
-    `, [limit]);
+    `, [startDate, endDate, limit]);
 
     console.log('Recent orders found:', results.length);
     
