@@ -742,14 +742,46 @@ static async getPendingPayments() {
   }
 }
 
-// Process payment
-// In Order.js - Update the processPayment method
 static async processPayment(orderId, paymentData, cashierId) {
   const connection = await db.beginTransaction();
   
   try {
     console.log(`Processing payment for order ${orderId}`);
     console.log('Payment data received:', paymentData);
+    
+    // Get the order total (this is the SUBTOTAL before VAT)
+    const orderSql = 'SELECT total_amount FROM orders WHERE id = ?';
+    const [orderResult] = await connection.execute(orderSql, [orderId]);
+    
+    if (!orderResult || orderResult.length === 0) {
+      throw new Error('Order not found');
+    }
+    
+    const subtotal = parseFloat(orderResult[0].total_amount);
+    
+    // ========== CORRECT VAT CALCULATION ==========
+    const VAT_RATE = 0.15; // 15% VAT
+    
+    let vatAmount;
+    if (paymentData.tax !== undefined && paymentData.tax !== null) {
+      // Use provided tax amount
+      vatAmount = parseFloat(paymentData.tax);
+    } else {
+      // CORRECT: Calculate VAT as 15% OF THE SUBTOTAL (price before VAT)
+      // VAT = Subtotal × 0.15
+      vatAmount = subtotal * VAT_RATE;
+      vatAmount = Math.round(vatAmount * 100) / 100; // Round to 2 decimals
+      
+      console.log(`Calculated VAT (15% of ${subtotal}): ${vatAmount}`);
+    }
+    
+    // Calculate final total that customer pays
+    const finalTotal = subtotal + vatAmount;
+    
+    console.log(`Breakdown: Subtotal: ${subtotal.toFixed(2)} + VAT: ${vatAmount.toFixed(2)} = Final Total: ${finalTotal.toFixed(2)}`);
+    
+    // Update paymentData with calculated tax
+    paymentData.tax = vatAmount;
     
     // Update order with payment info INCLUDING tax column
     const updateSql = `
@@ -759,7 +791,7 @@ static async processPayment(orderId, paymentData, cashierId) {
           tip = ?,
           discount = ?,
           split_count = ?,
-          tax = ?,           -- ADDED: Store VAT in tax column
+          tax = ?,           -- Store calculated VAT (15% of subtotal)
           cashier_id = ?,
           status = 'completed',
           completed_time = NOW(),
@@ -773,12 +805,12 @@ static async processPayment(orderId, paymentData, cashierId) {
       parseFloat(paymentData.tip) || 0.00,
       parseFloat(paymentData.discount) || 0.00,
       parseInt(paymentData.split_count) || 1,
-      parseFloat(paymentData.tax) || 0.00,  // ADDED: Get tax from paymentData
+      vatAmount,  // USE CALCULATED VAT AMOUNT (15% of subtotal)
       cashierId,
       orderId
     ]);
     
-    console.log(`Tax (VAT) stored: ${paymentData.tax || 0}`);
+    console.log(`Tax (VAT) stored in database: ${vatAmount}`);
     
     // Free up the table
     const order = await this.findById(orderId);
@@ -792,8 +824,19 @@ static async processPayment(orderId, paymentData, cashierId) {
     
     await connection.commit();
     
-    // Return updated order
-    return await this.findById(orderId);
+    // Return updated order with VAT info
+    const updatedOrder = await this.findById(orderId);
+    
+    // Add VAT breakdown to response
+    return {
+      ...updatedOrder,
+      vat_breakdown: {
+        subtotal: subtotal,
+        vat_rate: '15%',
+        vat_amount: vatAmount,
+        final_total: finalTotal
+      }
+    };
     
   } catch (error) {
     await connection.rollback();

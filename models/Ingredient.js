@@ -121,123 +121,113 @@ static async getAll(filters = {}) {
     }
   }
 
-  // ========== CREATE METHOD ==========
-  static async create(ingredientData) {
-    const connection = await db.beginTransaction();
+ // models/Ingredient.js - SIMPLE create method
+static async create(ingredientData) {
+  const connection = await db.beginTransaction();
+  
+  try {
+    const {
+      name, unit, current_stock = 0, minimum_stock = 10,
+      cost_per_unit = 0, supplier_id, category, notes
+    } = ingredientData;
     
-    try {
-      const {
-        name, unit, current_stock = 0, minimum_stock = 10,
-        cost_per_unit = 0, supplier_id, category, notes
-      } = ingredientData;
-      
-      // Insert ingredient
-      const [result] = await connection.query(`
-        INSERT INTO ingredients 
-        (name, unit, current_stock, minimum_stock, cost_per_unit, 
-         supplier_id, category, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-      `, [
-        name, unit, current_stock, minimum_stock, 
-        cost_per_unit, supplier_id, category, notes
-      ]);
-      
-      const ingredientId = result.insertId;
-      
-      // Record stock history (initial stock)
-      if (current_stock > 0) {
-        await connection.query(`
-          INSERT INTO stock_history 
-          (ingredient_id, previous_stock, new_stock, adjustment, 
-           notes, updated_by, updated_at)
-          VALUES (?, 0, ?, ?, 'Initial stock', 1, NOW())
-        `, [ingredientId, current_stock, current_stock]);
-      }
-      
-      await connection.commit();
-      
-      // Return full ingredient details
-      return await this.findById(ingredientId);
-    } catch (error) {
-      await connection.rollback();
-      console.error('Error in Ingredient.create:', error);
-      throw error;
-    } finally {
-      connection.release();
-    }
+    console.log('Creating:', name);
+    
+    // Insert ingredient
+    const [result] = await connection.query(`
+      INSERT INTO ingredients 
+      (name, unit, current_stock, minimum_stock, cost_per_unit, 
+       supplier_id, category, notes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+    `, [
+      name, unit, current_stock, minimum_stock, 
+      cost_per_unit, supplier_id, category, notes
+    ]);
+    
+    await connection.commit();
+    
+    // Just return what was inserted with the ID
+    return {
+      id: result.insertId,
+      name: name,
+      unit: unit,
+      current_stock: current_stock,
+      minimum_stock: minimum_stock,
+      cost_per_unit: cost_per_unit,
+      supplier_id: supplier_id,
+      category: category,
+      notes: notes,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      supplier_name: null // We'll add this later if needed
+    };
+    
+  } catch (error) {
+    await connection.rollback();
+    console.error('Create error:', error);
+    throw error;
+  } finally {
+    connection.release();
   }
-
+}
   // ========== UPDATE METHOD ==========
-  static async update(id, updateData, userId = 1) {
-    const connection = await db.beginTransaction();
+  // models/Ingredient.js - SIMPLEST update method
+static async update(id, updateData) {
+  try {
+    console.log('Updating ingredient ID:', id, 'with:', updateData);
     
-    try {
-      // Get current ingredient data for history
-      const [currentRows] = await connection.query(
-        'SELECT * FROM ingredients WHERE id = ?',
-        [id]
-      );
-      const currentIngredient = currentRows[0];
-      
-      if (!currentIngredient) {
-        throw new Error('Ingredient not found');
-      }
-      
-      const allowedFields = [
-        'name', 'unit', 'current_stock', 'minimum_stock', 
-        'cost_per_unit', 'supplier_id', 'category', 'notes'
-      ];
-      
-      const updates = [];
-      const params = [];
-      
-      Object.keys(updateData).forEach(key => {
-        if (allowedFields.includes(key) && updateData[key] !== undefined) {
-          updates.push(`${key} = ?`);
-          params.push(updateData[key]);
-        }
-      });
-      
-      if (updates.length === 0) {
-        await connection.rollback();
-        return await this.findById(id);
-      }
-      
-      updates.push('updated_at = NOW()');
-      params.push(id);
-      
-      // Update ingredient
-      await connection.query(
-        `UPDATE ingredients SET ${updates.join(', ')} WHERE id = ?`,
-        params
-      );
-      
-      // Record stock history if stock changed
-      if (updateData.current_stock !== undefined) {
-        const newStock = parseFloat(updateData.current_stock);
-        const oldStock = parseFloat(currentIngredient.current_stock);
-        const adjustment = newStock - oldStock;
-        
-        await connection.query(`
-          INSERT INTO stock_history 
-          (ingredient_id, previous_stock, new_stock, adjustment, 
-           notes, updated_by, updated_at)
-          VALUES (?, ?, ?, ?, 'Manual adjustment', ?, NOW())
-        `, [id, oldStock, newStock, adjustment, userId]);
-      }
-      
-      await connection.commit();
-      
-      // Return updated ingredient with all details
-      return await this.findById(id);
-    } catch (error) {
-      await connection.rollback();
-      console.error('Error in Ingredient.update:', error);
-      throw error;
-    } finally {
-      connection.release();
+    // Check if ingredient exists first
+    const [checkRows] = await db.query(
+      'SELECT * FROM ingredients WHERE id = ?',
+      [id]
+    );
+    
+    if (!checkRows || checkRows.length === 0) {
+      throw new Error(`Ingredient ${id} not found`);
     }
+    
+    // Build update query
+    const allowedFields = [
+      'name', 'unit', 'current_stock', 'minimum_stock', 
+      'cost_per_unit', 'supplier_id', 'category', 'notes'
+    ];
+    
+    const updates = [];
+    const params = [];
+    
+    Object.keys(updateData).forEach(key => {
+      if (allowedFields.includes(key) && updateData[key] !== undefined) {
+        updates.push(`${key} = ?`);
+        params.push(updateData[key]);
+      }
+    });
+    
+    if (updates.length === 0) {
+      return checkRows[0]; // No changes
+    }
+    
+    updates.push('updated_at = NOW()');
+    params.push(id);
+    
+    // Execute update
+    await db.query(
+      `UPDATE ingredients SET ${updates.join(', ')} WHERE id = ?`,
+      params
+    );
+    
+    // Return merged data
+    return {
+      ...checkRows[0],
+      ...updateData,
+      id: id,
+      updated_at: new Date().toISOString()
+    };
+    
+  } catch (error) {
+    console.error('Update error:', error);
+    throw error;
   }
+}
 
   // ========== DELETE METHOD ==========
   static async delete(id) {
@@ -258,9 +248,7 @@ static async getAll(filters = {}) {
       // Delete from ingredients table
       await connection.query('DELETE FROM ingredients WHERE id = ?', [id]);
       
-      // Also delete stock history (optional)
-      await connection.query('DELETE FROM stock_history WHERE ingredient_id = ?', [id]);
-      
+      // Also delete stock history (optional
       await connection.commit();
       
       return { 
@@ -433,50 +421,47 @@ static async getAll(filters = {}) {
   }
 
   // Update stock with transaction tracking
-  static async updateStock(id, quantity, userId, notes = '') {
-    const connection = await db.beginTransaction();
+  // models/Ingredient.js - CORRECT updateStock
+static async updateStock(id, quantity) {
+  const connection = await db.beginTransaction();
+  
+  try {
+    // Get current stock
+    const [rows] = await connection.query(
+      'SELECT current_stock FROM ingredients WHERE id = ?',
+      [id]
+    );
     
-    try {
-      // Get current stock
-      const [rows] = await connection.query(
-        'SELECT * FROM ingredients WHERE id = ?',
-        [id]
-      );
-      const ingredient = rows[0];
-      
-      if (!ingredient) {
-        throw new Error('Ingredient not found');
-      }
-      
-      const oldStock = parseFloat(ingredient.current_stock);
-      const newStock = oldStock + parseFloat(quantity);
-      
-      // Update ingredient stock
-      await connection.query(
-        'UPDATE ingredients SET current_stock = ?, updated_at = NOW() WHERE id = ?',
-        [newStock, id]
-      );
-      
-      // Record stock history
-      await connection.query(`
-        INSERT INTO stock_history 
-        (ingredient_id, previous_stock, new_stock, adjustment, 
-         notes, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, NOW())
-      `, [id, oldStock, newStock, quantity, notes, userId]);
-      
-      await connection.commit();
-      
-      // Return updated ingredient
-      return await this.findById(id);
-    } catch (error) {
-      await connection.rollback();
-      console.error('Error in Ingredient.updateStock:', error);
-      throw error;
-    } finally {
-      connection.release();
+    if (!rows || rows.length === 0) {
+      throw new Error(`Ingredient ${id} not found`);
     }
+    
+    const oldStock = parseFloat(rows[0].current_stock);
+    const newStock = oldStock + parseFloat(quantity);
+    
+    // Update stock
+    await connection.query(
+      'UPDATE ingredients SET current_stock = ?, updated_at = NOW() WHERE id = ?',
+      [newStock, id]
+    );
+    
+    await connection.commit();
+    
+    // Return new stock value
+    return { 
+      id: id,
+      new_stock: newStock,
+      adjustment: parseFloat(quantity)
+    };
+    
+  } catch (error) {
+    await connection.rollback();
+    console.error('Update stock error:', error);
+    throw error;
+  } finally {
+    connection.release();
   }
+}
 
   // Get ingredient usage statistics
   static async getUsageStats() {

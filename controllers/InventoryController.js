@@ -64,81 +64,105 @@ static async getIngredients(req, res) {
   }
 
   // ========== CREATE INGREDIENT (WITH HISTORY) ==========
-  static async createIngredient(req, res) {
-    try {
-      const ingredientData = req.body;
-      const userId = req.user.id;
+  // controllers/InventoryController.js - SIMPLE createIngredient
+static async createIngredient(req, res) {
+  try {
+    const ingredientData = req.body;
+    
+    console.log('Creating ingredient:', ingredientData.name);
+    
+    // Validate required fields
+    if (!ingredientData.name || !ingredientData.unit) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Name and unit are required fields' 
+      });
+    }
+    
+    // Call the model - let IT handle the database
+    const ingredient = await Ingredient.create(ingredientData);
+    
+    console.log('Model returned:', ingredient);
+    
+    // If model returns the ingredient, send success
+    if (ingredient) {
+      console.log(`✅ Created: ${ingredient.name} (ID: ${ingredient.id})`);
       
-      console.log('Creating new ingredient:', ingredientData.name);
-      
-      // Validate required fields
-      if (!ingredientData.name || !ingredientData.unit) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Name and unit are required fields' 
-        });
-      }
-      
-      // Add user ID to ingredient data for history
-      const ingredientWithUser = { ...ingredientData };
-      
-      const ingredient = await Ingredient.create(ingredientWithUser);
-      
-      console.log(`Ingredient created successfully: ${ingredient.name} (ID: ${ingredient.id})`);
-      
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: 'Ingredient created successfully',
-        data: ingredient,
-        created_by: req.user.username
-      });
-    } catch (error) {
-      console.error('Error in createIngredient:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: 'Failed to create ingredient',
-        details: error.message 
+        data: ingredient
       });
     }
+    
+    // If model returns null/undefined but no error thrown
+    console.warn('⚠️ Model returned null/undefined');
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create ingredient - model returned null'
+    });
+    
+  } catch (error) {
+    console.error('❌ Create error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create ingredient',
+      details: error.message
+    });
   }
+}
 
   // ========== UPDATE INGREDIENT (WITH HISTORY) ==========
-  static async updateIngredient(req, res) {
-    try {
-      const { id } = req.params;
-      const updateData = req.body;
-      const userId = req.user.id;
-      
-      console.log(`Updating ingredient ID: ${id}`, updateData);
-      
-      // Check if ingredient exists first
-      const existingIngredient = await Ingredient.findById(id);
-      if (!existingIngredient) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Ingredient not found' 
-        });
-      }
-      
-      const ingredient = await Ingredient.update(id, updateData, userId);
-      
-      console.log(`Ingredient updated successfully: ${ingredient.name}`);
-      
-      res.json({
-        success: true,
-        message: 'Ingredient updated successfully',
-        data: ingredient,
-        updated_by: req.user.username
-      });
-    } catch (error) {
-      console.error('Error in updateIngredient:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: 'Failed to update ingredient',
-        details: error.message 
+ // controllers/InventoryController.js - SIMPLE updateIngredient controller
+static async updateIngredient(req, res) {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+    
+    console.log('🟡 Updating ingredient ID:', id);
+    console.log('🟡 Update data:', updateData);
+    
+    // Call the model's update method
+    const ingredient = await Ingredient.update(id, updateData);
+    
+    console.log('🟡 Update result:', ingredient);
+    
+    // Check if update was successful
+    if (!ingredient) {
+      console.error('❌ Update returned null');
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update ingredient'
       });
     }
+    
+    console.log(`✅ Updated: ${ingredient.name} (ID: ${ingredient.id})`);
+    
+    // Return success response
+    return res.json({
+      success: true,
+      message: 'Ingredient updated successfully',
+      data: ingredient
+    });
+    
+  } catch (error) {
+    console.error('❌ Update error:', error);
+    
+    // Handle specific errors
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: error.message
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update ingredient',
+      details: error.message
+    });
   }
+}
 
   // ========== DELETE INGREDIENT ==========
   static async deleteIngredient(req, res) {
@@ -167,45 +191,40 @@ static async getIngredients(req, res) {
   }
 
   // ========== UPDATE STOCK (WITH HISTORY) ==========
-  static async updateStock(req, res) {
-    try {
-      const { id } = req.params;
-      const { quantity, notes } = req.body;
-      const userId = req.user.id;
-      
-      console.log(`Updating stock for ingredient ID: ${id}, quantity: ${quantity}`);
-      
-      if (!quantity || isNaN(parseFloat(quantity))) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Valid quantity is required' 
-        });
-      }
-      
-      const ingredient = await Ingredient.updateStock(
-        id, 
-        parseFloat(quantity), 
-        userId, 
-        notes || 'Manual stock adjustment'
-      );
-      
-      console.log(`Stock updated successfully for ${ingredient.name}`);
-      
-      res.json({
-        success: true,
-        message: 'Stock updated successfully',
-        data: ingredient,
-        adjustment: parseFloat(quantity),
-        updated_by: req.user.username
-      });
-    } catch (error) {
-      console.error('Error in updateStock:', error);
-      res.status(500).json({ 
+  // controllers/InventoryController.js - updateStock
+static async updateStock(req, res) {
+  try {
+    const { id } = req.params;
+    const { quantity, notes } = req.body;
+    const userId = req.user.id; // Controller knows about user
+    
+    console.log(`User ${userId} updating stock for ${id}:`, quantity, notes);
+    
+    if (!quantity || isNaN(parseFloat(quantity))) {
+      return res.status(400).json({ 
         success: false, 
-        error: error.message 
+        error: 'Valid quantity required' 
       });
     }
+    
+    // Call model - only pass what it needs
+    const result = await Ingredient.updateStock(id, parseFloat(quantity));
+
+    
+    res.json({
+      success: true,
+      message: 'Stock updated',
+      data: result
+    });
+    
+  } catch (error) {
+    console.error('Update stock error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
+}
 
   // ========== GET STOCK SUMMARY (COMPREHENSIVE) ==========
   static async getStockSummary(req, res) {

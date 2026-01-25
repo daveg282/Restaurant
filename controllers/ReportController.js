@@ -442,6 +442,201 @@ static async getDashboardData(req, res) {
     // Cap at 5.0
     return Math.min(5.0, rating).toFixed(1);
   }
+  // ========== FINANCIAL REPORT ENDPOINTS ==========
+
+static async getProfitLossReport(req, res) {
+  try {
+    const { start_date, end_date, period = 'month' } = req.query;
+    
+    let dateRange;
+    if (start_date && end_date) {
+      dateRange = { 
+        startDate: new Date(start_date),
+        endDate: new Date(end_date) 
+      };
+      dateRange.endDate.setHours(23, 59, 59, 999);
+    } else {
+      dateRange = ReportModel.getDateRange(period);
+    }
+
+    const plStatement = await ReportModel.getProfitLossStatement(
+      dateRange.startDate,
+      dateRange.endDate
+    );
+
+    res.json({
+      success: true,
+      data: {
+        ...plStatement,
+        generated_at: new Date().toISOString(),
+        report_type: 'profit_loss_statement'
+      }
+    });
+  } catch (error) {
+    console.error('Profit loss report error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+static async getVATReport(req, res) {
+  try {
+    const { start_date, end_date, period = 'month' } = req.query;
+    
+    let dateRange;
+    if (start_date && end_date) {
+      dateRange = { 
+        startDate: new Date(start_date),
+        endDate: new Date(end_date) 
+      };
+      dateRange.endDate.setHours(23, 59, 59, 999);
+    } else {
+      dateRange = ReportModel.getDateRange(period);
+    }
+
+    const vatReport = await ReportModel.getVATReport(
+      dateRange.startDate,
+      dateRange.endDate
+    );
+
+    res.json({
+      success: true,
+      data: {
+        ...vatReport,
+        generated_at: new Date().toISOString(),
+        report_type: 'vat_tax_report'
+      }
+    });
+  } catch (error) {
+    console.error('VAT report error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+static async getFinancialSummary(req, res) {
+  try {
+    const { start_date, end_date, period = 'today' } = req.query;
+    
+    let dateRange;
+    if (start_date && end_date) {
+      dateRange = { 
+        startDate: new Date(start_date),
+        endDate: new Date(end_date) 
+      };
+      dateRange.endDate.setHours(23, 59, 59, 999);
+    } else {
+      dateRange = ReportModel.getDateRange(period);
+    }
+
+    const financialSummary = await ReportModel.getFinancialSummary(
+      dateRange.startDate,
+      dateRange.endDate
+    );
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          start_date: dateRange.startDate.toISOString().split('T')[0],
+          end_date: dateRange.endDate.toISOString().split('T')[0],
+          type: start_date && end_date ? 'custom' : period
+        },
+        ...financialSummary,
+        generated_at: new Date().toISOString(),
+        report_type: 'financial_summary'
+      }
+    });
+  } catch (error) {
+    console.error('Financial summary error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+static async getExpenseReport(req, res) {
+  try {
+    const { start_date, end_date, period = 'month', detailed = 'false' } = req.query;
+    
+    let dateRange;
+    if (start_date && end_date) {
+      dateRange = { 
+        startDate: new Date(start_date),
+        endDate: new Date(end_date) 
+      };
+      dateRange.endDate.setHours(23, 59, 59, 999);
+    } else {
+      dateRange = ReportModel.getDateRange(period);
+    }
+
+    const expenseData = await ReportModel.getExpenseData(
+      dateRange.startDate,
+      dateRange.endDate
+    );
+
+    const report = {
+      period: {
+        start_date: dateRange.startDate.toISOString().split('T')[0],
+        end_date: dateRange.endDate.toISOString().split('T')[0],
+        type: start_date && end_date ? 'custom' : period
+      },
+      expense_summary: expenseData,
+      generated_at: new Date().toISOString(),
+      report_type: 'expense_report'
+    };
+
+    // Add detailed expense breakdown if requested
+    if (detailed === 'true') {
+      // You would need to implement this method in ReportModel
+      // const detailedExpenses = await ReportModel.getDetailedExpenses(...);
+      // report.detailed_expenses = detailedExpenses;
+    }
+
+    res.json({
+      success: true,
+      data: report
+    });
+  } catch (error) {
+    console.error('Expense report error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+static async getFinancialKPIs(req, res) {
+  try {
+    const { start_date, end_date, period = 'month' } = req.query;
+    
+    let dateRange;
+    if (start_date && end_date) {
+      dateRange = { 
+        startDate: new Date(start_date),
+        endDate: new Date(end_date) 
+      };
+      dateRange.endDate.setHours(23, 59, 59, 999);
+    } else {
+      dateRange = ReportModel.getDateRange(period);
+    }
+
+    const kpis = await ReportModel.getFinancialKPIs(
+      dateRange.startDate,
+      dateRange.endDate
+    );
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          start_date: dateRange.startDate.toISOString().split('T')[0],
+          end_date: dateRange.endDate.toISOString().split('T')[0],
+          type: start_date && end_date ? 'custom' : period
+        },
+        ...kpis,
+        generated_at: new Date().toISOString(),
+        report_type: 'financial_kpis'
+      }
+    });
+  } catch (error) {
+    console.error('Financial KPIs error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
 }
 
 module.exports = ReportController;

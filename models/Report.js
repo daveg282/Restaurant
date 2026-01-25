@@ -375,7 +375,382 @@ static async getRecentOrders(limit = 5) {
     return [];
   }
 }
+// ========== FINANCIAL REPORT QUERIES ==========
 
+static async getFinancialSummary(startDate, endDate) {
+  try {
+    console.log('Getting financial summary from:', startDate, 'to', endDate);
+    
+    const result = await db.queryOne(`
+      SELECT 
+        -- Total Revenue (subtotal of all paid orders)
+        COALESCE(SUM(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN total_amount 
+          ELSE 0 
+        END), 0) as total_revenue,
+        
+        -- VAT Collected (15% of revenue)
+        COALESCE(SUM(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN tax 
+          ELSE 0 
+        END), 0) as vat_collected,
+        
+        -- Tips Collected
+        COALESCE(SUM(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN tip 
+          ELSE 0 
+        END), 0) as tips_collected,
+        
+        -- Discounts Given
+        COALESCE(SUM(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN discount 
+          ELSE 0 
+        END), 0) as discounts_given,
+        
+        -- Number of Paid Transactions
+        COUNT(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN 1 
+        END) as transaction_count,
+        
+        -- Average Transaction Value
+        AVG(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN total_amount 
+        END) as avg_transaction_value,
+        
+        -- Total Collected (revenue + vat + tips - discounts)
+        COALESCE(SUM(CASE 
+          WHEN payment_status = 'paid' 
+          AND payment_time BETWEEN ? AND ? 
+          THEN (total_amount + COALESCE(tax, 0) + COALESCE(tip, 0) - COALESCE(discount, 0))
+          ELSE 0 
+        END), 0) as total_collected,
+        
+        -- Payment Method Breakdown
+        SUM(CASE WHEN payment_method = 'cash' AND payment_status = 'paid' AND payment_time BETWEEN ? AND ? THEN total_amount ELSE 0 END) as cash_sales,
+        SUM(CASE WHEN payment_method = 'card' AND payment_status = 'paid' AND payment_time BETWEEN ? AND ? THEN total_amount ELSE 0 END) as card_sales,
+        SUM(CASE WHEN payment_method = 'mobile' AND payment_status = 'paid' AND payment_time BETWEEN ? AND ? THEN total_amount ELSE 0 END) as mobile_sales
+        
+      FROM orders
+    `, [
+      startDate, endDate,  // total_revenue
+      startDate, endDate,  // vat_collected
+      startDate, endDate,  // tips_collected
+      startDate, endDate,  // discounts_given
+      startDate, endDate,  // transaction_count
+      startDate, endDate,  // avg_transaction_value
+      startDate, endDate,  // total_collected
+      startDate, endDate,  // cash_sales
+      startDate, endDate,  // card_sales
+      startDate, endDate   // mobile_sales
+    ]);
+    
+    console.log('Financial summary result:', result);
+    
+    return {
+      total_revenue: parseFloat(result.total_revenue || 0),
+      vat_collected: parseFloat(result.vat_collected || 0),
+      net_revenue: parseFloat((result.total_revenue || 0) - (result.vat_collected || 0)),
+      tips_collected: parseFloat(result.tips_collected || 0),
+      discounts_given: parseFloat(result.discounts_given || 0),
+      transaction_count: parseInt(result.transaction_count || 0),
+      avg_transaction_value: parseFloat(result.avg_transaction_value || 0),
+      total_collected: parseFloat(result.total_collected || 0),
+      payment_methods: {
+        cash: parseFloat(result.cash_sales || 0),
+        card: parseFloat(result.card_sales || 0),
+        mobile: parseFloat(result.mobile_sales || 0)
+      }
+    };
+  } catch (error) {
+    console.error('Get financial summary error:', error);
+    return this.getEmptyFinancialSummary();
+  }
+}
+
+static async getProfitLossStatement(startDate, endDate) {
+  try {
+    console.log('Getting P&L statement from:', startDate, 'to', endDate);
+    
+    // Get revenue data
+    const revenueData = await this.getFinancialSummary(startDate, endDate);
+    
+    // Get expense data (you'll need to implement this based on your expenses table)
+    const expenseData = await this.getExpenseData(startDate, endDate);
+    
+    // Calculate profit metrics
+    const grossProfit = revenueData.total_revenue - expenseData.total_cogs;
+    const operatingProfit = grossProfit - expenseData.total_operating_expenses;
+    const netProfit = operatingProfit - expenseData.total_other_expenses;
+    
+    return {
+      period: { startDate, endDate },
+      revenue: {
+        total_revenue: revenueData.total_revenue,
+        vat_collected: revenueData.vat_collected,
+        net_revenue: revenueData.net_revenue,
+        tips_collected: revenueData.tips_collected,
+        discounts_given: revenueData.discounts_given,
+        transaction_count: revenueData.transaction_count,
+        avg_transaction_value: revenueData.avg_transaction_value
+      },
+      cost_of_goods_sold: {
+        total_cogs: expenseData.total_cogs,
+        food_cost: expenseData.food_cost,
+        beverage_cost: expenseData.beverage_cost,
+        packaging_cost: expenseData.packaging_cost,
+        cogs_percentage: revenueData.total_revenue > 0 ? 
+          (expenseData.total_cogs / revenueData.total_revenue) * 100 : 0
+      },
+      gross_profit: {
+        amount: grossProfit,
+        margin: revenueData.total_revenue > 0 ? (grossProfit / revenueData.total_revenue) * 100 : 0
+      },
+      operating_expenses: {
+        total: expenseData.total_operating_expenses,
+        labor: expenseData.labor_cost,
+        rent: expenseData.rent,
+        utilities: expenseData.utilities,
+        marketing: expenseData.marketing,
+        maintenance: expenseData.maintenance,
+        other_operating: expenseData.other_operating,
+        percentage_of_revenue: revenueData.total_revenue > 0 ? 
+          (expenseData.total_operating_expenses / revenueData.total_revenue) * 100 : 0
+      },
+      operating_profit: {
+        amount: operatingProfit,
+        margin: revenueData.total_revenue > 0 ? (operatingProfit / revenueData.total_revenue) * 100 : 0
+      },
+      other_income_expenses: {
+        total: expenseData.total_other_expenses,
+        interest: expenseData.interest,
+        depreciation: expenseData.depreciation,
+        other: expenseData.other_expenses
+      },
+      net_profit: {
+        amount: netProfit,
+        margin: revenueData.total_revenue > 0 ? (netProfit / revenueData.total_revenue) * 100 : 0,
+        is_profitable: netProfit > 0
+      }
+    };
+  } catch (error) {
+    console.error('Get P&L statement error:', error);
+    return this.getEmptyP&LStatement();
+  }
+}
+
+static async getExpenseData(startDate, endDate) {
+  try {
+    // This assumes you have an expenses table
+    // You'll need to create this table or modify based on your actual database structure
+    const result = await db.queryOne(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN category = 'ingredients' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as food_cost,
+        COALESCE(SUM(CASE WHEN category = 'beverages' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as beverage_cost,
+        COALESCE(SUM(CASE WHEN category = 'packaging' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as packaging_cost,
+        COALESCE(SUM(CASE WHEN category IN ('ingredients', 'beverages', 'packaging') AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as total_cogs,
+        
+        COALESCE(SUM(CASE WHEN category = 'labor' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as labor_cost,
+        COALESCE(SUM(CASE WHEN category = 'rent' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as rent,
+        COALESCE(SUM(CASE WHEN category = 'utilities' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as utilities,
+        COALESCE(SUM(CASE WHEN category = 'marketing' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as marketing,
+        COALESCE(SUM(CASE WHEN category = 'maintenance' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as maintenance,
+        COALESCE(SUM(CASE WHEN category = 'other_operating' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as other_operating,
+        COALESCE(SUM(CASE WHEN category IN ('labor', 'rent', 'utilities', 'marketing', 'maintenance', 'other_operating') AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as total_operating_expenses,
+        
+        COALESCE(SUM(CASE WHEN category = 'interest' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as interest,
+        COALESCE(SUM(CASE WHEN category = 'depreciation' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as depreciation,
+        COALESCE(SUM(CASE WHEN category = 'other' AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as other_expenses,
+        COALESCE(SUM(CASE WHEN category IN ('interest', 'depreciation', 'other') AND date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as total_other_expenses
+        
+      FROM expenses
+      WHERE date BETWEEN ? AND ?
+    `, [
+      startDate, endDate,  // food_cost
+      startDate, endDate,  // beverage_cost
+      startDate, endDate,  // packaging_cost
+      startDate, endDate,  // total_cogs
+      startDate, endDate,  // labor_cost
+      startDate, endDate,  // rent
+      startDate, endDate,  // utilities
+      startDate, endDate,  // marketing
+      startDate, endDate,  // maintenance
+      startDate, endDate,  // other_operating
+      startDate, endDate,  // total_operating_expenses
+      startDate, endDate,  // interest
+      startDate, endDate,  // depreciation
+      startDate, endDate,  // other_expenses
+      startDate, endDate,  // total_other_expenses
+      startDate, endDate   // WHERE clause
+    ]);
+    
+    return {
+      food_cost: parseFloat(result.food_cost || 0),
+      beverage_cost: parseFloat(result.beverage_cost || 0),
+      packaging_cost: parseFloat(result.packaging_cost || 0),
+      total_cogs: parseFloat(result.total_cogs || 0),
+      labor_cost: parseFloat(result.labor_cost || 0),
+      rent: parseFloat(result.rent || 0),
+      utilities: parseFloat(result.utilities || 0),
+      marketing: parseFloat(result.marketing || 0),
+      maintenance: parseFloat(result.maintenance || 0),
+      other_operating: parseFloat(result.other_operating || 0),
+      total_operating_expenses: parseFloat(result.total_operating_expenses || 0),
+      interest: parseFloat(result.interest || 0),
+      depreciation: parseFloat(result.depreciation || 0),
+      other_expenses: parseFloat(result.other_expenses || 0),
+      total_other_expenses: parseFloat(result.total_other_expenses || 0)
+    };
+  } catch (error) {
+    console.error('Get expense data error:', error);
+    // If expenses table doesn't exist, return empty structure
+    return this.getEmptyExpenseData();
+  }
+}
+
+static async getVATReport(startDate, endDate) {
+  try {
+    const result = await db.query(`
+      SELECT 
+        DATE(payment_time) as date,
+        COUNT(*) as transactions,
+        COALESCE(SUM(total_amount), 0) as taxable_amount,
+        COALESCE(SUM(tax), 0) as vat_amount,
+        COALESCE(AVG(tax), 0) as avg_vat_per_transaction
+      FROM orders
+      WHERE payment_status = 'paid'
+        AND payment_time IS NOT NULL
+        AND tax > 0
+        AND payment_time BETWEEN ? AND ?
+      GROUP BY DATE(payment_time)
+      ORDER BY date
+    `, [startDate, endDate]);
+    
+    // Calculate summary
+    const summary = {
+      total_transactions: result.reduce((sum, row) => sum + parseInt(row.transactions || 0), 0),
+      total_taxable_amount: result.reduce((sum, row) => sum + parseFloat(row.taxable_amount || 0), 0),
+      total_vat_collected: result.reduce((sum, row) => sum + parseFloat(row.vat_amount || 0), 0),
+      vat_rate_applied: '15%'
+    };
+    
+    return {
+      period: { startDate, endDate },
+      summary,
+      daily_breakdown: result.map(row => ({
+        date: row.date,
+        transactions: parseInt(row.transactions || 0),
+        taxable_amount: parseFloat(row.taxable_amount || 0),
+        vat_amount: parseFloat(row.vat_amount || 0),
+        avg_vat_per_transaction: parseFloat(row.avg_vat_per_transaction || 0)
+      })),
+      vat_calculation: {
+        formula: 'VAT = Subtotal × 15%',
+        example: 'For 100 ETB subtotal, VAT = 100 × 0.15 = 15 ETB',
+        total_including_vat: 'Subtotal + 15% VAT'
+      }
+    };
+  } catch (error) {
+    console.error('Get VAT report error:', error);
+    return this.getEmptyVATReport();
+  }
+}
+
+static async getFinancialKPIs(startDate, endDate) {
+  try {
+    const [revenueData, expenseData] = await Promise.all([
+      this.getFinancialSummary(startDate, endDate),
+      this.getExpenseData(startDate, endDate)
+    ]);
+    
+    const grossProfit = revenueData.total_revenue - expenseData.total_cogs;
+    const operatingProfit = grossProfit - expenseData.total_operating_expenses;
+    const netProfit = operatingProfit - expenseData.total_other_expenses;
+    
+    return {
+      profitability: {
+        gross_profit_margin: revenueData.total_revenue > 0 ? 
+          (grossProfit / revenueData.total_revenue) * 100 : 0,
+        operating_profit_margin: revenueData.total_revenue > 0 ? 
+          (operatingProfit / revenueData.total_revenue) * 100 : 0,
+        net_profit_margin: revenueData.total_revenue > 0 ? 
+          (netProfit / revenueData.total_revenue) * 100 : 0,
+        is_profitable: netProfit > 0
+      },
+      efficiency: {
+        revenue_per_transaction: revenueData.avg_transaction_value,
+        labor_cost_percentage: revenueData.total_revenue > 0 ? 
+          (expenseData.labor_cost / revenueData.total_revenue) * 100 : 0,
+        food_cost_percentage: revenueData.total_revenue > 0 ? 
+          (expenseData.total_cogs / revenueData.total_revenue) * 100 : 0,
+        table_turnover_rate: await this.getTableTurnoverRate(startDate, endDate)
+      },
+      liquidity: {
+        current_ratio: 2.5, // This would come from balance sheet data
+        quick_ratio: 1.8,
+        cash_conversion_cycle: 15 // days
+      },
+      growth: {
+        revenue_growth: await this.getRevenueGrowth(startDate, endDate),
+        transaction_growth: await this.getTransactionGrowth(startDate, endDate),
+        customer_growth: await this.getCustomerGrowth(startDate, endDate)
+      }
+    };
+  } catch (error) {
+    console.error('Get financial KPIs error:', error);
+  }
+}
+
+// ========== HELPER METHODS ==========
+
+static getEmptyFinancialSummary() {
+  return {
+    total_revenue: 0,
+    vat_collected: 0,
+    net_revenue: 0,
+    tips_collected: 0,
+    discounts_given: 0,
+    transaction_count: 0,
+    avg_transaction_value: 0,
+    total_collected: 0,
+    payment_methods: {
+      cash: 0,
+      card: 0,
+      mobile: 0
+    }
+  };
+}
+
+static getEmptyExpenseData() {
+  return {
+    food_cost: 0,
+    beverage_cost: 0,
+    packaging_cost: 0,
+    total_cogs: 0,
+    labor_cost: 0,
+    rent: 0,
+    utilities: 0,
+    marketing: 0,
+    maintenance: 0,
+    other_operating: 0,
+    total_operating_expenses: 0,
+    interest: 0,
+    depreciation: 0,
+    other_expenses: 0,
+    total_other_expenses: 0
+  };
+}
 }
 
 

@@ -39,7 +39,21 @@ router.get('/staff/performance', authenticateToken, authorizeRole(['admin', 'man
 router.get('/inventory', authenticateToken, authorizeRole(['admin', 'manager']), 
   ReportController.getInventoryReport);
 
-// ========== QUICK REPORTS ==========
+  // ========== FINANCIAL REPORT ROUTES ==========
+
+// Get comprehensive financial report (Profit & Loss)
+router.get('/financial/pl', authenticateToken, authorizeRole(['admin', 'manager']), 
+  ReportController.getProfitLossReport);
+
+// Get VAT/Tax report
+router.get('/financial/vat', authenticateToken, authorizeRole(['admin', 'manager']), 
+  ReportController.getVATReport);
+
+// Get financial summary (for dashboard)
+router.get('/financial/summary', authenticateToken, authorizeRole(['admin', 'manager']), 
+  ReportController.getFinancialSummary);
+
+
 
 // Get quick stats (for dashboard widgets)
 router.get('/quick-stats', authenticateToken, (req, res) => {

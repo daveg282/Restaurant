@@ -23,7 +23,7 @@ router.put('/:id', authenticateToken, authorizeRole(['admin', 'manager']),
   SupplierController.updateSupplier);
 
 // Delete supplier (soft delete)
-router.delete('/:id', authenticateToken, authorizeRole(['admin']), 
+router.delete('/:id', authenticateToken, authorizeRole(['admin', 'manager']), 
   SupplierController.deleteSupplier);
 
 // Get suppliers with their ingredients

@@ -41,7 +41,7 @@ router.post('/ingredients', authenticateToken, authorizeRole(['admin', 'manager'
 router.put('/ingredients/:id', authenticateToken, authorizeRole(['admin', 'manager']), 
   InventoryController.updateIngredient);
 
-router.delete('/ingredients/:id', authenticateToken, authorizeRole(['admin']), 
+router.delete('/ingredients/:id', authenticateToken, authorizeRole(['admin', 'manager']), 
   InventoryController.deleteIngredient);
 
 router.patch('/ingredients/:id/stock', authenticateToken, authorizeRole(['admin', 'manager']), 
