@@ -98,7 +98,7 @@ class AuthController {
         });
       }
 
-      // Generate token
+      // Generate token with token_version included
       const token = User.generateToken(user);
 
       // Remove password from response
@@ -113,7 +113,8 @@ class AuthController {
         success: true,
         details: { 
           role: user.role,
-          user_agent: loginAttemptData.user_agent.substring(0, 100) // Truncate
+          token_version: user.token_version || 1,
+          user_agent: loginAttemptData.user_agent.substring(0, 100)
         }
       });
 
@@ -246,6 +247,7 @@ class AuthController {
           first_name: user.first_name,
           last_name: user.last_name,
           status: user.status,
+          token_version: user.token_version || 1,
           created_at: user.created_at
         },
         token
@@ -322,6 +324,16 @@ class AuthController {
       
       const updatedUser = await User.update(req.user.id, updateData);
       
+      // If password changed, invalidate all tokens
+      let newToken;
+      if (password) {
+        // Invalidate all tokens when password changes
+        await User.invalidateTokens(req.user.id);
+        // Generate new token with updated version
+        const refreshedUser = await User.findById(req.user.id);
+        newToken = User.generateToken(refreshedUser);
+      }
+      
       // Log profile update
       await AuditLog.create({
         user_id: req.user.id,
@@ -332,14 +344,11 @@ class AuthController {
         details: { 
           updated_fields: Object.keys(updateData),
           old_email: oldUser.email,
-          new_email: updatedUser.email || oldUser.email
+          new_email: updatedUser.email || oldUser.email,
+          password_changed: !!password,
+          token_invalidated: !!password
         }
       });
-      
-      let token = req.headers.authorization?.split(' ')[1];
-      if (email || password) {
-        token = User.generateToken(updatedUser);
-      }
       
       const { password: _, ...userWithoutPassword } = updatedUser;
       
@@ -347,7 +356,7 @@ class AuthController {
         success: true,
         message: 'Profile updated successfully',
         user: userWithoutPassword,
-        token: token || undefined
+        token: newToken || undefined
       });
     } catch (error) {
       console.error('Update profile error:', error);
@@ -505,12 +514,14 @@ class AuthController {
       const oldUserData = {
         email: targetUser.email,
         role: targetUser.role,
-        status: targetUser.status
+        status: targetUser.status,
+        token_version: targetUser.token_version || 1
       };
       
       // Remove protected fields
       delete updateData.id;
       delete updateData.created_at;
+      delete updateData.token_version; // Cannot directly update token version
       
       const updatedUser = await User.update(id, updateData);
       const { password, ...userWithoutPassword } = updatedUser;
@@ -529,7 +540,8 @@ class AuthController {
           new_data: {
             email: updatedUser.email,
             role: updatedUser.role,
-            status: updatedUser.status
+            status: updatedUser.status,
+            token_version: updatedUser.token_version || 1
           }
         }
       });
@@ -612,7 +624,8 @@ class AuthController {
         email: targetUser.email,
         role: targetUser.role,
         first_name: targetUser.first_name,
-        last_name: targetUser.last_name
+        last_name: targetUser.last_name,
+        token_version: targetUser.token_version || 1
       };
       
       await User.delete(id);
@@ -686,7 +699,7 @@ class AuthController {
             target_user_id: userId,
             target_user_role: targetUser.role,
             reason: 'manager_cannot_reset_admin_password'
-          }
+        }
         });
 
         return res.status(403).json({
@@ -705,12 +718,14 @@ class AuthController {
         details: { 
           target_user_id: userId,
           target_user_email: targetUser.email,
-          reset_by_role: req.user.role
+          reset_by_role: req.user.role,
+          target_token_version: targetUser.token_version || 1
         }
       });
       
-      // Update password
+      // Update password and invalidate all tokens
       await User.update(userId, { password: newPassword });
+      await User.invalidateTokens(userId);
       
       // Log successful reset
       await AuditLog.create({
@@ -721,13 +736,14 @@ class AuthController {
         success: true,
         details: { 
           target_user_id: userId,
-          target_user_email: targetUser.email
+          target_user_email: targetUser.email,
+          token_version_incremented: true
         }
       });
       
       res.json({
         success: true,
-        message: 'Password reset successfully',
+        message: 'Password reset successfully. All existing sessions have been invalidated.',
         user_id: userId
       });
     } catch (error) {
@@ -831,10 +847,18 @@ class AuthController {
         ip_address: req.ip,
         user_agent: req.headers['user-agent'],
         success: true,
-        details: { }
+        details: { 
+          current_token_version: user.token_version || 1
+        }
       });
       
+      // Update password and invalidate all tokens
       await User.update(req.user.id, { password: newPassword });
+      await User.invalidateTokens(req.user.id);
+      
+      // Generate new token with updated version
+      const updatedUser = await User.findById(req.user.id);
+      const newToken = User.generateToken(updatedUser);
       
       // Log successful change
       await AuditLog.create({
@@ -843,12 +867,16 @@ class AuthController {
         ip_address: req.ip,
         user_agent: req.headers['user-agent'],
         success: true,
-        details: { }
+        details: { 
+          token_version_incremented: true,
+          new_token_version: updatedUser.token_version || 1
+        }
       });
       
       res.json({
         success: true,
-        message: 'Password changed successfully'
+        message: 'Password changed successfully. All other sessions have been logged out.',
+        token: newToken
       });
     } catch (error) {
       console.error('Change password error:', error);
@@ -869,7 +897,9 @@ class AuthController {
         ip_address: req.ip,
         user_agent: req.headers['user-agent'],
         success: true,
-        details: { }
+        details: { 
+          token_version: req.user.token_version || 1
+        }
       });
 
       res.json({
@@ -881,6 +911,115 @@ class AuthController {
       res.json({
         success: true,
         message: 'Logout successful'
+      });
+    }
+  }
+
+  // NEW: Force logout from all devices
+  static async logoutAllDevices(req, res) {
+    try {
+      // Invalidate all tokens by incrementing token_version
+      await User.invalidateTokens(req.user.id);
+      
+      // Get updated user to generate new token
+      const updatedUser = await User.findById(req.user.id);
+      const newToken = User.generateToken(updatedUser);
+      
+      // Log the action
+      await AuditLog.create({
+        user_id: req.user.id,
+        action: 'logout_all_devices',
+        ip_address: req.ip,
+        user_agent: req.headers['user-agent'],
+        success: true,
+        details: { 
+          old_token_version: req.user.token_version || 1,
+          new_token_version: updatedUser.token_version || 1,
+          devices_logged_out: 'all'
+        }
+      });
+
+      res.json({
+        success: true,
+        message: 'Logged out from all devices',
+        token: newToken  // Send new token for current session
+      });
+    } catch (error) {
+      console.error('Logout all devices error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Server error logging out all devices'
+      });
+    }
+  }
+
+  // NEW: Suspend user account and invalidate all tokens
+  static async suspendUser(req, res) {
+    try {
+      const { id } = req.params;
+      const { reason } = req.body;
+      
+      // Get target user first
+      const targetUser = await User.findById(id);
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+      
+      // Permission checks (similar to deleteUser)
+      if (parseInt(id) === req.user.id) {
+        return res.status(400).json({
+          success: false,
+          error: 'Cannot suspend your own account'
+        });
+      }
+      
+      if (req.user.role === 'manager' && ['admin', 'manager'].includes(targetUser.role)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Cannot suspend admin or manager accounts'
+        });
+      }
+      
+      // Invalidate all tokens first
+      await User.invalidateTokens(id);
+      
+      // Then suspend the account
+      const updatedUser = await User.update(id, { 
+        status: 'inactive',
+        ...(reason && { suspension_reason: reason })
+      });
+      
+      // Log suspension
+      await AuditLog.create({
+        user_id: req.user.id,
+        action: 'user_suspended',
+        ip_address: req.ip,
+        user_agent: req.headers['user-agent'],
+        success: true,
+        details: { 
+          target_user_id: id,
+          target_user_email: targetUser.email,
+          reason: reason || 'No reason provided',
+          token_version_incremented: true,
+          old_token_version: targetUser.token_version || 1,
+          new_token_version: updatedUser.token_version || 1
+        }
+      });
+      
+      res.json({
+        success: true,
+        message: 'User account suspended. All active sessions have been terminated.',
+        user_id: id,
+        suspended_at: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Suspend user error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Server error suspending user'
       });
     }
   }

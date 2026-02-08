@@ -35,8 +35,8 @@ class User {
       const hashedPassword = await bcrypt.hash(userData.password, 10);
       
       const sql = `
-        INSERT INTO users (username, email, password, role, first_name, last_name) 
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO users (username, email, password, role, first_name, last_name, token_version) 
+        VALUES (?, ?, ?, ?, ?, ?, 1)
       `;
       
       const params = [
@@ -58,6 +58,7 @@ class User {
         first_name: userData.first_name || '',
         last_name: userData.last_name || '',
         status: 'active',
+        token_version: 1,
         created_at: new Date()
       };
     } catch (error) {
@@ -73,6 +74,11 @@ class User {
   }
 
   static generateToken(user) {
+    // Validate JWT_SECRET exists
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
+      throw new Error('JWT_SECRET is not configured in environment variables');
+    }
+    
     return jwt.sign(
       {
         id: user.id,
@@ -80,7 +86,8 @@ class User {
         role: user.role,
         username: user.username,
         first_name: user.first_name,
-        last_name: user.last_name
+        last_name: user.last_name,
+        token_version: user.token_version || 1  // Include token version in token
       },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
@@ -91,8 +98,9 @@ class User {
     try {
       let sql = `
         SELECT id, username, email, role, first_name, last_name, 
-               status, created_at, updated_at
+               status, token_version, created_at, updated_at
         FROM users
+        WHERE 1=1
       `;
       
       const params = [];
@@ -114,9 +122,9 @@ class User {
     try {
       let sql = `
         SELECT id, username, email, role, first_name, last_name, 
-               status, created_at, updated_at
+               status, token_version, created_at, updated_at
         FROM users
-      where role IN ('cashier', 'waiter', 'chef')
+        WHERE role IN ('cashier', 'waiter', 'chef')
       `;
       
       const params = [];
@@ -164,6 +172,9 @@ class User {
         updates.push('username = ?');
         params.push(userData.username);
       }
+      
+      // Note: We don't allow direct update of token_version through this method
+      // Use invalidateTokens() method instead
       
       if (userData.password) {
         const hashedPassword = await bcrypt.hash(userData.password, 10);
@@ -244,7 +255,7 @@ class User {
     try {
       let sql = `
         SELECT id, username, email, role, first_name, last_name, 
-               status, created_at
+               status, token_version, created_at
         FROM users
         WHERE status = "active"
         AND (username LIKE ? OR email LIKE ? OR first_name LIKE ? OR last_name LIKE ?)
@@ -263,6 +274,61 @@ class User {
       return await db.query(sql, params);
     } catch (error) {
       throw new Error(`Error searching users: ${error.message}`);
+    }
+  }
+
+  // NEW: Invalidate all tokens for a user by incrementing token_version
+  static async invalidateTokens(userId) {
+    try {
+      const sql = 'UPDATE users SET token_version = token_version + 1 WHERE id = ?';
+      const result = await db.execute(sql, [userId]);
+      
+      // Return the new token version
+      const updatedUser = await this.findById(userId);
+      return {
+        success: true,
+        new_token_version: updatedUser.token_version,
+        affected_rows: result.affectedRows
+      };
+    } catch (error) {
+      throw new Error(`Error invalidating tokens: ${error.message}`);
+    }
+  }
+
+  // NEW: Get user with token version check
+  static async findByIdWithTokenCheck(id, tokenVersion) {
+    try {
+      const sql = 'SELECT * FROM users WHERE id = ? AND token_version = ?';
+      return await db.queryOne(sql, [id, tokenVersion]);
+    } catch (error) {
+      throw new Error(`Error finding user with token check: ${error.message}`);
+    }
+  }
+
+  // NEW: Get active sessions count (if you implement sessions table later)
+  static async getActiveSessionsCount(userId) {
+    try {
+      const sql = `
+        SELECT COUNT(*) as active_sessions 
+        FROM user_sessions 
+        WHERE user_id = ? AND is_active = TRUE AND expires_at > NOW()
+      `;
+      const result = await db.queryOne(sql, [userId]);
+      return result.active_sessions || 0;
+    } catch (error) {
+      // If sessions table doesn't exist yet, return 0
+      return 0;
+    }
+  }
+
+  // NEW: Get user's token version
+  static async getTokenVersion(userId) {
+    try {
+      const sql = 'SELECT token_version FROM users WHERE id = ?';
+      const result = await db.queryOne(sql, [userId]);
+      return result ? result.token_version : null;
+    } catch (error) {
+      throw new Error(`Error getting token version: ${error.message}`);
     }
   }
 }
