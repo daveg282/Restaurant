@@ -100,7 +100,7 @@ class AuthController {
 
       // Generate token with token_version included
       const token = User.generateToken(user);
-
+       
       // Remove password from response
       const { password: _, ...userWithoutPassword } = user;
 

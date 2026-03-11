@@ -38,14 +38,13 @@ static async generateOrderNumber() {
   }
 }
 
-  // Create new order
 static async create(orderData, items, userId) {
   const connection = await db.beginTransaction();
-  
+
   try {
-    // 1. Generate order number
-    const orderNumber = `ORD-${Date.now()}`;
-    
+    // 1. Generate safer order number
+    const orderNumber = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
     // 2. Calculate total
     let totalAmount = 0;
     for (const item of items) {
@@ -53,17 +52,20 @@ static async create(orderData, items, userId) {
       const quantity = parseInt(item.quantity) || 1;
       totalAmount += price * quantity;
     }
-    
-    // 3. Insert order
+
+    // 3. Ensure proper table_id handling
+    const tableId = orderData.table_id ? parseInt(orderData.table_id) : null;
+
+    // 4. Insert order
     const insertSql = `
       INSERT INTO orders 
       (order_number, table_id, customer_name, status, payment_status, total_amount, waiter_id, notes) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    
+
     const params = [
       orderNumber,
-      parseInt(orderData.table_id),
+      tableId, // NULL for takeaway orders
       orderData.customer_name || '',
       'pending',
       'pending',
@@ -71,23 +73,22 @@ static async create(orderData, items, userId) {
       parseInt(userId),
       orderData.notes || ''
     ];
-    
-    // FIX: Destructure the result array
+
     const [result] = await connection.execute(insertSql, params);
     const orderId = result.insertId;
-    
+
     if (!orderId) {
       throw new Error('Insert failed');
     }
-    
-    // 4. Insert order items
+
+    // 5. Insert order items
     for (const item of items) {
       const itemSql = `
         INSERT INTO order_items 
         (order_id, menu_item_id, quantity, price, special_instructions, status) 
         VALUES (?, ?, ?, ?, ?, ?)
       `;
-      
+
       await connection.execute(itemSql, [
         orderId,
         item.menu_item_id,
@@ -97,27 +98,27 @@ static async create(orderData, items, userId) {
         'pending'
       ]);
     }
-    
-    // 5. Update table
-    if (orderData.table_id) {
+
+    // 6. Update table status ONLY for dine-in orders
+    if (tableId) {
       await connection.execute(
         'UPDATE tables SET status = "occupied" WHERE id = ?',
-        [orderData.table_id]
+        [tableId]
       );
     }
-    
+
     await connection.commit();
-    
+
     return {
       id: orderId,
       order_number: orderNumber,
-      table_id: orderData.table_id,
+      table_id: tableId,
       customer_name: orderData.customer_name,
       total_amount: totalAmount,
       waiter_id: userId,
       items
     };
-    
+
   } catch (error) {
     await connection.rollback();
     throw error;

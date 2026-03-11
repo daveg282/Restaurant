@@ -5,21 +5,16 @@ const Pager = require('../models/pager');
 const MenuItem = require('../models/menuItem');
 
 class OrderController {
-  // Create new order
- static async createOrder(req, res) {
+static async createOrder(req, res) {
   try {
-    const { table_id, customer_name, items, customer_count, notes } = req.body;
+    const { table_id, customer_name, items, customer_count, notes, order_type } = req.body;
+
     const userId = req.user.id;
-    const userRole = req.user.role;
+    const isTakeaway = order_type === 'takeaway';
 
-    // Validation (same as before)
-    if (!table_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Table ID is required'
-      });
-    }
-
+    // -------------------------------
+    // Validate items
+    // -------------------------------
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
         success: false,
@@ -27,26 +22,49 @@ class OrderController {
       });
     }
 
-    // Validate table exists and is available
-    const table = await Table.findById(table_id);
-    if (!table) {
-      return res.status(404).json({
-        success: false,
-        error: 'Table not found'
-      });
+    // -------------------------------
+    // Handle table logic safely
+    // -------------------------------
+    let table = null;
+    let finalTableId = null;
+
+    if (!isTakeaway) {
+      const parsedTableId = parseInt(table_id);
+
+      if (!parsedTableId || isNaN(parsedTableId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Valid table ID is required for dine-in orders'
+        });
+      }
+
+      table = await Table.findById(parsedTableId);
+
+      if (!table) {
+        return res.status(404).json({
+          success: false,
+          error: 'Table not found'
+        });
+      }
+
+      if (table.status !== 'available' && table.status !== 'reserved') {
+        return res.status(400).json({
+          success: false,
+          error: `Table is ${table.status}. Please select an available table.`
+        });
+      }
+
+      finalTableId = parsedTableId;
     }
 
-    if (table.status !== 'available' && table.status !== 'reserved') {
-      return res.status(400).json({
-        success: false,
-        error: `Table is ${table.status}. Please select an available table.`
-      });
-    }
-
-    // Validate menu items and get current prices
+    // -------------------------------
+    // Validate menu items
+    // -------------------------------
     const validatedItems = [];
+
     for (const item of items) {
       const menuItem = await MenuItem.findById(item.menu_item_id);
+
       if (!menuItem) {
         return res.status(404).json({
           success: false,
@@ -69,15 +87,22 @@ class OrderController {
       });
     }
 
-    // Simplified order data WITHOUT pager
+    // -------------------------------
+    // Prepare order data
+    // -------------------------------
     const orderData = {
-      table_id,
-      customer_name: customer_name || `Table ${table.table_number}`,
-      customer_count: customer_count || table.capacity,
+      table_id: finalTableId, // NULL for takeaway
+      customer_name:
+        customer_name ||
+        (isTakeaway ? 'Takeaway Customer' : `Table ${table.table_number}`),
+      customer_count: customer_count || (table ? table.capacity : 1),
+      order_type: order_type || 'dine-in',
       notes: notes || ''
     };
 
+    // -------------------------------
     // Create order
+    // -------------------------------
     const order = await Order.create(orderData, validatedItems, userId);
 
     res.status(201).json({
@@ -86,14 +111,17 @@ class OrderController {
       order,
       items: validatedItems
     });
+
   } catch (error) {
     console.error('Create order error:', error);
+
     res.status(500).json({
       success: false,
       error: error.message || 'Server error creating order'
     });
   }
 }
+
 
   // Get all orders
   static async getAllOrders(req, res) {
@@ -222,6 +250,12 @@ class OrderController {
 
       // Update status
       const updatedOrder = await Order.updateStatus(id, status, userId, userRole);
+
+      // Clear new items flag whenever chef acknowledges by changing status
+      if (['preparing', 'ready'].includes(status)) {
+        const db = require('../config/db');
+        await db.execute('UPDATE orders SET has_new_items = 0 WHERE id = ?', [id]);
+      }
 
       res.json({
         success: true,
@@ -440,15 +474,20 @@ static async updateStatus(id, status, userId = null, role = null) {
         special_instructions: itemData.special_instructions || ''
       });
 
-      // Update order total
+      // Update total and flag kitchen that new items were added
       const newTotal = parseFloat(order.total_amount) + (menuItem.price * (itemData.quantity || 1));
-      await Order.update(id, { total_amount: newTotal });
+      const db = require('../config/db');
+      await db.execute(
+        'UPDATE orders SET total_amount = ?, has_new_items = 1 WHERE id = ?',
+        [parseFloat(newTotal).toFixed(2), id]
+      );
 
       res.json({
         success: true,
         message: 'Item added to order successfully',
         item: orderItem,
-        order_total: newTotal
+        order_total: newTotal,
+        has_new_items: true
       });
     } catch (error) {
       console.error('Add item to order error:', error);
