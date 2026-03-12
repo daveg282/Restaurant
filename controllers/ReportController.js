@@ -7,7 +7,7 @@ class ReportController {
 static async getDashboardData(req, res) {
   try {
     const userRole = req.user.role;
-    const { period = 'today' } = req.query; // ADD THIS: Get period from query params
+    const { period = 'today' } = req.query;
     
     console.log('=== DASHBOARD REQUEST ===');
     console.log('Requested period:', period);
@@ -25,12 +25,22 @@ static async getDashboardData(req, res) {
       case 'week':
         dateRange = ReportModel.getDateRange('week');
         comparisonRange = ReportModel.getDateRange('week');
+        // Create new Date objects to avoid modifying the original
+        comparisonRange = {
+          startDate: new Date(comparisonRange.startDate),
+          endDate: new Date(comparisonRange.endDate)
+        };
         comparisonRange.startDate.setDate(comparisonRange.startDate.getDate() - 7);
         comparisonRange.endDate.setDate(comparisonRange.endDate.getDate() - 7);
         break;
       case 'month':
         dateRange = ReportModel.getDateRange('month');
         comparisonRange = ReportModel.getDateRange('month');
+        // Create new Date objects to avoid modifying the original
+        comparisonRange = {
+          startDate: new Date(comparisonRange.startDate),
+          endDate: new Date(comparisonRange.endDate)
+        };
         comparisonRange.startDate.setMonth(comparisonRange.startDate.getMonth() - 1);
         comparisonRange.endDate.setMonth(comparisonRange.endDate.getMonth() - 1);
         break;
@@ -39,16 +49,34 @@ static async getDashboardData(req, res) {
         comparisonRange = ReportModel.getDateRange('yesterday');
     }
     
-    console.log('Selected period range:', dateRange.startDate, 'to', dateRange.endDate);
-    console.log('Comparison range:', comparisonRange.startDate, 'to', comparisonRange.endDate);
+    // Ensure both ranges have valid Date objects
+    dateRange = {
+      startDate: dateRange.startDate instanceof Date ? dateRange.startDate : new Date(dateRange.startDate),
+      endDate: dateRange.endDate instanceof Date ? dateRange.endDate : new Date(dateRange.endDate)
+    };
+    
+    comparisonRange = {
+      startDate: comparisonRange.startDate instanceof Date ? comparisonRange.startDate : new Date(comparisonRange.startDate),
+      endDate: comparisonRange.endDate instanceof Date ? comparisonRange.endDate : new Date(comparisonRange.endDate)
+    };
+    
+    // Validate dates
+    if (isNaN(dateRange.startDate.getTime()) || isNaN(dateRange.endDate.getTime())) {
+      console.error('Invalid date objects detected! Falling back to today');
+      dateRange = ReportModel.getDateRange('today');
+      comparisonRange = ReportModel.getDateRange('yesterday');
+    }
+    
+    console.log('Selected period range:', dateRange.startDate.toISOString(), 'to', dateRange.endDate.toISOString());
+    console.log('Comparison range:', comparisonRange.startDate.toISOString(), 'to', comparisonRange.endDate.toISOString());
 
     // Fetch data for selected period and comparison period
     const [currentStats, comparisonStats, staffPerformance, popularItems, recentOrders] = await Promise.all([
       ReportModel.getSalesSummary(dateRange.startDate, dateRange.endDate),
       ReportModel.getSalesSummary(comparisonRange.startDate, comparisonRange.endDate),
-      ReportModel.getStaffPerformance(dateRange.startDate, dateRange.endDate), // Filter staff by selected period
-      ReportModel.getTopSellingItems(dateRange.startDate, dateRange.endDate, 5), // Filter popular items by selected period
-      ReportModel.getRecentOrders(5) // Recent orders always show last 24 hours
+      ReportModel.getStaffPerformance(dateRange.startDate, dateRange.endDate),
+      ReportModel.getTopSellingItems(dateRange.startDate, dateRange.endDate, 5),
+      ReportModel.getRecentOrders(5)
     ]);
 
     console.log('=== DASHBOARD RESULTS ===');
@@ -68,13 +96,13 @@ static async getDashboardData(req, res) {
     res.json({
       success: true,
       data: {
-        performance_stats: performanceStats, // Only includes selected period
-        staff_performance: activeStaff, // Filtered by period
-        popular_items: popularItems, // Filtered by period
+        performance_stats: performanceStats,
+        staff_performance: activeStaff,
+        popular_items: popularItems,
         recent_orders: recentOrders,
         user_role: userRole,
         generated_at: new Date().toISOString(),
-        period: period // Add period to response for debugging
+        period: period
       }
     });
   } catch (error) {
