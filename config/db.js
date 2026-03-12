@@ -63,25 +63,26 @@ class Database {
   }
 
   async checkPoolHealth() {
-    try {
-      const connection = await this.pool.getConnection();
-      await connection.ping();
+  try {
+    const connection = await this.pool.getConnection();
+    await connection.ping();
 
-      const poolState = this.pool.pool || this.pool; // internal pool state
-      console.log('\n📊 Database Pool Status:', {
-        timestamp: new Date().toLocaleTimeString(),
-        totalConnections: poolState._allConnections?.length || 0,
-        activeConnections: poolState._acquiringConnections?.length || 0,
-        idleConnections: poolState._freeConnections?.length || 0,
-        pendingQueries: poolState._connectionQueue?.length || 0,
-        connectionLimit: this.pool.config.connectionLimit
-      });
+    const poolState = this.pool.pool || this.pool;
 
-      connection.release();
-    } catch (error) {
-      console.error('❌ Pool health check failed:', error.message);
-    }
+    console.log('\n📊 Database Pool Status:', {
+      timestamp: new Date().toLocaleTimeString(),
+      totalConnections: poolState._allConnections?.length || 0,
+      activeConnections: poolState._acquiringConnections?.length || 0,
+      idleConnections: poolState._freeConnections?.length || 0,
+      pendingQueries: poolState._connectionQueue?.length || 0,
+      connectionLimit: this.pool.config?.connectionLimit || 0 // ✅ optional chaining
+    });
+
+    connection.release();
+  } catch (error) {
+    console.error('❌ Pool health check failed:', error.message);
   }
+}
 
   // General query
   async query(sql, params = []) {
