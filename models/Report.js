@@ -112,46 +112,56 @@ class ReportModel {
   }
 
   static async getTopSellingItems(startDate, endDate, limit = 10) {
-    try {
-      console.log('Popular items query dates:', startDate.toISOString(), 'to', endDate.toISOString());
-      
-      // FIX: ensure limit is always an integer — mysql2 strict prepared statements require this
-      const safeLimit = parseInt(limit, 10) || 10;
+  try {
+    console.log('Popular items query dates:', startDate, 'to', endDate);
+    
+    // FIX: Convert dates to MySQL compatible format
+    const formattedStartDate = startDate instanceof Date 
+      ? startDate.toISOString().slice(0, 19).replace('T', ' ') 
+      : startDate;
+    const formattedEndDate = endDate instanceof Date 
+      ? endDate.toISOString().slice(0, 19).replace('T', ' ') 
+      : endDate;
+    
+    // FIX: ensure limit is always an integer
+    const safeLimit = parseInt(limit, 10) || 10;
 
-      const results = await db.query(`
-        SELECT 
-          mi.id,
-          mi.name,
-          c.name as category_name,
-          COUNT(oi.id) as order_count,
-          SUM(oi.quantity) as total_quantity,
-          SUM(oi.quantity * mi.price) as total_revenue
-        FROM order_items oi
-        JOIN menu_items mi ON oi.menu_item_id = mi.id
-        LEFT JOIN categories c ON mi.category_id = c.id
-        JOIN orders o ON oi.order_id = o.id
-        WHERE o.payment_status = 'paid'
-          AND o.order_time BETWEEN ? AND ?
-        GROUP BY mi.id, mi.name, c.name
-        ORDER BY total_quantity DESC
-        LIMIT ?
-      `, [startDate, endDate, safeLimit]);
+    console.log('Formatted dates:', formattedStartDate, 'to', formattedEndDate);
 
-      console.log('Popular items found:', results.length);
-      
-      return results.map(row => ({
-        id: row.id,
-        name: row.name,
-        category: row.category_name,
-        order_count: parseInt(row.order_count || 0),
-        total_quantity: parseInt(row.total_quantity || 0),
-        total_revenue: parseFloat(row.total_revenue || 0)
-      }));
-    } catch (error) {
-      console.error('Get top selling items error:', error);
-      return [];
-    }
+    const results = await db.query(`
+      SELECT 
+        mi.id,
+        mi.name,
+        c.name as category_name,
+        COUNT(oi.id) as order_count,
+        SUM(oi.quantity) as total_quantity,
+        SUM(oi.quantity * mi.price) as total_revenue
+      FROM order_items oi
+      JOIN menu_items mi ON oi.menu_item_id = mi.id
+      LEFT JOIN categories c ON mi.category_id = c.id
+      JOIN orders o ON oi.order_id = o.id
+      WHERE o.payment_status = 'paid'
+        AND o.order_time BETWEEN ? AND ?
+      GROUP BY mi.id, mi.name, c.name
+      ORDER BY total_quantity DESC
+      LIMIT ?
+    `, [formattedStartDate, formattedEndDate, safeLimit]);
+
+    console.log('Popular items found:', results.length);
+    
+    return results.map(row => ({
+      id: row.id,
+      name: row.name,
+      category: row.category_name,
+      order_count: parseInt(row.order_count || 0),
+      total_quantity: parseInt(row.total_quantity || 0),
+      total_revenue: parseFloat(row.total_revenue || 0)
+    }));
+  } catch (error) {
+    console.error('Get top selling items error:', error);
+    return [];
   }
+}
 
   static async getPaymentMethodBreakdown(startDate, endDate) {
     try {
@@ -308,9 +318,6 @@ static async getRecentOrders(limit = 5) {
     return [];
   }
 }
-
-  // ========== FINANCIAL REPORT QUERIES ==========
-
   static async getFinancialSummary(startDate, endDate) {
     try {
       console.log('Getting financial summary from:', startDate, 'to', endDate);
