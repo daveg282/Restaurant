@@ -112,43 +112,64 @@ class ReportModel {
   }
 
  static async getTopSellingItems(startDate, endDate, limit = 10) {
+  let connection;
   try {
-    console.log('Popular items query dates:', startDate.toISOString(), 'to', endDate.toISOString());
+    console.log('Getting top items from', startDate, 'to', endDate);
     
-    // FIX: ensure limit is always an integer
-    const safeLimit = parseInt(limit, 10) || 10;
-
+    // Validate and format dates
+    if (!startDate || !endDate) {
+      console.error('Missing dates');
+      return [];
+    }
+    
+    // Convert to MySQL datetime strings
+    const start = new Date(startDate).toISOString().slice(0, 19).replace('T', ' ');
+    const end = new Date(endDate).toISOString().slice(0, 19).replace('T', ' ');
+    const itemLimit = parseInt(limit) || 10;
+    
+    console.log('Using dates:', start, '-', end);
+    
+    // Simple query - no joins first to test
     const results = await db.query(`
       SELECT 
         mi.id,
         mi.name,
-        c.name as category_name,
-        COUNT(oi.id) as order_count,
-        SUM(oi.quantity) as total_quantity,
-        SUM(oi.quantity * mi.price) as total_revenue  // ← FIX: make sure this is * not =
-      FROM order_items oi
-      JOIN menu_items mi ON oi.menu_item_id = mi.id
-      LEFT JOIN categories c ON mi.category_id = c.id
-      JOIN orders o ON oi.order_id = o.id
-      WHERE o.payment_status = 'paid'
-        AND o.order_time BETWEEN ? AND ?
-      GROUP BY mi.id, mi.name, c.name
+        COALESCE(SUM(oi.quantity), 0) as total_quantity,
+        COALESCE(SUM(oi.quantity * mi.price), 0) as total_revenue,
+        COUNT(DISTINCT oi.id) as order_count
+      FROM menu_items mi
+      LEFT JOIN order_items oi ON mi.id = oi.menu_item_id
+      LEFT JOIN orders o ON oi.order_id = o.id AND o.payment_status = 'paid' AND o.order_time BETWEEN ? AND ?
+      GROUP BY mi.id, mi.name
+      HAVING total_quantity > 0
       ORDER BY total_quantity DESC
       LIMIT ?
-    `, [startDate, endDate, safeLimit]);
-
-    console.log('Popular items found:', results.length);
+    `, [start, end, itemLimit]);
     
-    return results.map(row => ({
-      id: row.id,
-      name: row.name,
-      category: row.category_name,
-      order_count: parseInt(row.order_count || 0),
-      total_quantity: parseInt(row.total_quantity || 0),
-      total_revenue: parseFloat(row.total_revenue || 0)
-    }));
+    // Get category names separately
+    const enhancedResults = [];
+    for (const row of results) {
+      const catResult = await db.queryOne(`
+        SELECT c.name FROM categories c 
+        JOIN menu_items mi ON mi.category_id = c.id 
+        WHERE mi.id = ?
+      `, [row.id]);
+      
+      enhancedResults.push({
+        id: row.id,
+        name: row.name,
+        category: catResult?.name || 'Uncategorized',
+        order_count: parseInt(row.order_count) || 0,
+        total_quantity: parseInt(row.total_quantity) || 0,
+        total_revenue: parseFloat(row.total_revenue) || 0
+      });
+    }
+    
+    console.log(`Found ${enhancedResults.length} items`);
+    return enhancedResults;
+    
   } catch (error) {
-    console.error('Get top selling items error:', error);
+    console.error('Top selling items error:', error);
     return [];
   }
 }
@@ -263,48 +284,45 @@ class ReportModel {
 
   // ========== RECENT ORDERS ==========
 static async getRecentOrders(limit = 5) {
+  let connection;
   try {
-    // FIX: ensure limit is always an integer
-    const safeLimit = parseInt(limit, 10) || 5;
-
+    const orderLimit = parseInt(limit) || 5;
+    
     const results = await db.query(`
       SELECT 
         o.id,
         o.order_number,
         o.customer_name,
-        o.table_id,
+        COALESCE(t.table_number, 'Takeaway') as table_display,
         o.total_amount,
         o.status,
         o.payment_status,
         o.order_time,
         o.payment_method,
-        t.table_number,
-        u.first_name AS waiter_first_name,
-        u.last_name AS waiter_last_name
+        CONCAT(u.first_name, ' ', u.last_name) as waiter_name
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
       WHERE o.payment_status = 'paid'
       ORDER BY o.order_time DESC
       LIMIT ?
-    `, [safeLimit]);
-
+    `, [orderLimit]);
+    
     return results.map(row => ({
       id: row.id,
       order_number: row.order_number || `ORD-${row.id}`,
-      customer_name: row.customer_name || 'Walk-in',
-      table_number: row.table_number || row.table_id || 'Takeaway',
+      customer_name: row.customer_name || 'Guest',
+      table_number: row.table_display,
       total_amount: Number(row.total_amount || 0),
-      status: row.status || 'pending',
-      payment_status: row.payment_status || 'pending',
+      status: row.status || 'completed',
+      payment_status: row.payment_status,
       payment_method: row.payment_method || 'cash',
       order_time: row.order_time,
-      waiter_name: row.waiter_first_name
-        ? `${row.waiter_first_name} ${row.waiter_last_name}`
-        : 'Not assigned'
+      waiter_name: row.waiter_name || 'System'
     }));
+    
   } catch (error) {
-    console.error('Get recent orders error:', error);
+    console.error('Recent orders error:', error);
     return [];
   }
 }
