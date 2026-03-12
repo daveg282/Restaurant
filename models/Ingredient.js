@@ -45,7 +45,22 @@ static async getAll(filters = {}) {
     throw new Error(`Error getting ingredients: ${error.message}`);
   }
 }
-
+// models/Ingredient.js - Add this method
+static async getCategories() {
+  try {
+    const [categories] = await db.query(`
+      SELECT DISTINCT category 
+      FROM ingredients 
+      WHERE category IS NOT NULL AND category != ''
+      ORDER BY category ASC
+    `);
+    
+    return categories.map(c => c.category);
+  } catch (error) {
+    console.error('Error in Ingredient.getCategories:', error);
+    throw error;
+  }
+}
   // Get ingredient by ID with ALL details
   static async findById(id) {
     try {

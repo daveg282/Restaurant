@@ -481,36 +481,30 @@ static async updateStock(req, res) {
   }
 
   // ========== GET CATEGORIES LIST ==========
-  static async getCategories(req, res) {
-    try {
-      console.log('Fetching ingredient categories...');
-      
-      const [categories] = await db.query(`
-        SELECT DISTINCT category 
-        FROM ingredients 
-        WHERE category IS NOT NULL AND category != ''
-        ORDER BY category ASC
-      `);
-      
-      const categoryList = categories.map(c => c.category);
-      
-      console.log(`Found ${categoryList.length} categories`);
-      
-      res.json({
-        success: true,
-        data: categoryList,
-        count: categoryList.length,
-        message: 'Available ingredient categories'
-      });
-    } catch (error) {
-      console.error('Error in getCategories:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: 'Failed to fetch categories',
-        details: error.message 
-      });
-    }
+  // controllers/InventoryController.js - Update getCategories
+static async getCategories(req, res) {
+  try {
+    console.log('Fetching ingredient categories...');
+    
+    const categoryList = await Ingredient.getCategories();
+    
+    console.log(`Found ${categoryList.length} categories`);
+    
+    res.json({
+      success: true,
+      data: categoryList,
+      count: categoryList.length,
+      message: 'Available ingredient categories'
+    });
+  } catch (error) {
+    console.error('Error in getCategories:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch categories',
+      details: error.message 
+    });
   }
+}
 
   // ========== BULK STOCK UPDATE ==========
   static async bulkUpdateStock(req, res) {
