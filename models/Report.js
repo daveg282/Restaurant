@@ -261,52 +261,53 @@ class ReportModel {
 
   // ========== RECENT ORDERS ==========
 
-  static async getRecentOrders(limit = 5) {
-    try {
-      // FIX: ensure limit is always an integer — mysql2 strict prepared statements require this
-      const safeLimit = parseInt(limit, 10) || 5;
+  // ========== RECENT ORDERS ==========
+static async getRecentOrders(limit = 5) {
+  try {
+    // FIX: ensure limit is always an integer
+    const safeLimit = parseInt(limit, 10) || 5;
 
-      const results = await db.query(`
-        SELECT 
-          o.id,
-          o.order_number,
-          o.customer_name,
-          o.table_id,
-          o.total_amount,
-          o.status,
-          o.payment_status,
-          o.order_time,
-          o.payment_method,
-          t.table_number,
-          u.first_name AS waiter_first_name,
-          u.last_name AS waiter_last_name
-        FROM orders o
-        LEFT JOIN tables t ON o.table_id = t.id
-        LEFT JOIN users u ON o.waiter_id = u.id
-        WHERE o.payment_status = 'paid'
-        ORDER BY o.order_time DESC
-        LIMIT ?
-      `, [safeLimit]);
+    const results = await db.query(`
+      SELECT 
+        o.id,
+        o.order_number,
+        o.customer_name,
+        o.table_id,
+        o.total_amount,
+        o.status,
+        o.payment_status,
+        o.order_time,
+        o.payment_method,
+        t.table_number,
+        u.first_name AS waiter_first_name,
+        u.last_name AS waiter_last_name
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      LEFT JOIN users u ON o.waiter_id = u.id
+      WHERE o.payment_status = 'paid'
+      ORDER BY o.order_time DESC
+      LIMIT ?
+    `, [safeLimit]);
 
-      return results.map(row => ({
-        id: row.id,
-        order_number: row.order_number || `ORD-${row.id}`,
-        customer_name: row.customer_name || 'Walk-in',
-        table_number: row.table_number || row.table_id || 'Takeaway',
-        total_amount: Number(row.total_amount || 0),
-        status: row.status || 'pending',
-        payment_status: row.payment_status || 'pending',
-        payment_method: row.payment_method || 'cash',
-        order_time: row.order_time,
-        waiter_name: row.waiter_first_name
-          ? `${row.waiter_first_name} ${row.waiter_last_name}`
-          : 'Not assigned'
-      }));
-    } catch (error) {
-      console.error('Get recent orders error:', error);
-      return [];
-    }
+    return results.map(row => ({
+      id: row.id,
+      order_number: row.order_number || `ORD-${row.id}`,
+      customer_name: row.customer_name || 'Walk-in',
+      table_number: row.table_number || row.table_id || 'Takeaway',
+      total_amount: Number(row.total_amount || 0),
+      status: row.status || 'pending',
+      payment_status: row.payment_status || 'pending',
+      payment_method: row.payment_method || 'cash',
+      order_time: row.order_time,
+      waiter_name: row.waiter_first_name
+        ? `${row.waiter_first_name} ${row.waiter_last_name}`
+        : 'Not assigned'
+    }));
+  } catch (error) {
+    console.error('Get recent orders error:', error);
+    return [];
   }
+}
 
   // ========== FINANCIAL REPORT QUERIES ==========
 
