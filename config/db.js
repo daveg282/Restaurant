@@ -4,25 +4,23 @@ require('dotenv').config();
 class Database {
   constructor() {
     // ✅ Only valid pool options from the documentation are included
-    this.pool = mysql.createPool({
-      host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'vortex_admin',
-      password: process.env.DB_PASSWORD || '', // Ensure this is set correctly in .env
-      database: process.env.DB_NAME || 'restaurant_erp',
-      port: process.env.DB_PORT || 3306,
-      
-      // Connection pool configuration (valid options)
-      waitForConnections: true,
-      connectionLimit: 10,
-      maxIdle: 5,                    // Keep max 5 idle connections
-      idleTimeout: 60000,             // Release idle connections after 60 seconds
-      queueLimit: 0,
-      enableKeepAlive: true,
-      keepAliveInitialDelay: 0,
-      
-      // Timeouts (valid for pool)
-      connectTimeout: 10000,           // Fail if can't connect within 10s
-    });
+   this.pool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'vortex_admin',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'restaurant_erp',
+  port: process.env.DB_PORT || 3306,
+
+  waitForConnections: true,
+  connectionLimit: 151, // <-- match VPS limit
+  maxIdle: 10,
+  idleTimeout: 60000,
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
+
+  connectTimeout: 10000,
+});
     
     // ✅ Pool error handler (valid event)
     this.pool.on('error', (err) => {
