@@ -291,26 +291,27 @@ static async update(id, updateData) {
 
   // Get low stock ingredients
   static async getLowStock() {
-    try {
-      const [ingredients] = await db.query(`
-        SELECT 
-          i.*,
-          s.name as supplier_name,
-          s.contact_person,
-          s.phone as supplier_phone,
-          ROUND((i.current_stock / i.minimum_stock) * 100, 2) as stock_percentage
-        FROM ingredients i
-        LEFT JOIN suppliers s ON i.supplier_id = s.id
-        WHERE i.current_stock <= i.minimum_stock
-        ORDER BY i.current_stock / i.minimum_stock ASC
-      `);
-      
-      return ingredients;
-    } catch (error) {
-      console.error('Error in Ingredient.getLowStock:', error);
-      throw error;
-    }
+  try {
+    const [ingredients] = await db.query(`
+      SELECT 
+        i.*,
+        s.name as supplier_name,
+        s.contact_person,
+        s.phone as supplier_phone,
+        ROUND((i.current_stock / i.minimum_stock) * 100, 2) as stock_percentage
+      FROM ingredients i
+      LEFT JOIN suppliers s ON i.supplier_id = s.id
+      WHERE i.current_stock <= i.minimum_stock
+      ORDER BY i.current_stock / i.minimum_stock ASC
+    `);
+
+    return ingredients || [];
+
+  } catch (error) {
+    console.error('Error in Ingredient.getLowStock:', error);
+    return [];   // safer than throwing
   }
+}
 
   // Get ingredients with supplier info
   static async getWithSuppliers() {
