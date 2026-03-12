@@ -45,20 +45,42 @@ static async getAll(filters = {}) {
     throw new Error(`Error getting ingredients: ${error.message}`);
   }
 }
-// models/Ingredient.js - Add this method
+
 static async getCategories() {
   try {
-    const [categories] = await db.query(`
+    console.log('🔍 Running category query...');
+    
+    // CORRECT: Destructure the first element which contains the rows
+    const [rows] = await db.query(`
       SELECT DISTINCT category 
       FROM ingredients 
-      WHERE category IS NOT NULL AND category != ''
+      WHERE category IS NOT NULL 
+        AND category != ''
+        AND category != 'null'
+        AND TRIM(category) != ''
       ORDER BY category ASC
     `);
     
-    return categories.map(c => c.category);
+    console.log('📦 Raw rows:', rows);
+    
+    // Now rows should be an array
+    if (!Array.isArray(rows)) {
+      console.error('❌ Rows is not an array:', rows);
+      return [];
+    }
+    
+    // Map the rows to get just the category values
+    const categoryList = rows
+      .map(row => row.category)
+      .filter(category => category && typeof category === 'string');
+    
+    console.log(`✅ Found ${categoryList.length} categories:`, categoryList);
+    
+    return categoryList;
+    
   } catch (error) {
-    console.error('Error in Ingredient.getCategories:', error);
-    throw error;
+    console.error('❌ Error in Ingredient.getCategories:', error);
+    return []; // Return empty array on error
   }
 }
   // Get ingredient by ID with ALL details
