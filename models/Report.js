@@ -130,21 +130,24 @@ class ReportModel {
     console.log('Using dates:', start, '-', end);
     
     // Simple query - no joins first to test
-    const results = await db.query(`
-      SELECT 
-        mi.id,
-        mi.name,
-        COALESCE(SUM(oi.quantity), 0) as total_quantity,
-        COALESCE(SUM(oi.quantity * mi.price), 0) as total_revenue,
-        COUNT(DISTINCT oi.id) as order_count
-      FROM menu_items mi
-      LEFT JOIN order_items oi ON mi.id = oi.menu_item_id
-      LEFT JOIN orders o ON oi.order_id = o.id AND o.payment_status = 'paid' AND o.order_time BETWEEN ? AND ?
-      GROUP BY mi.id, mi.name
-      HAVING total_quantity > 0
-      ORDER BY total_quantity DESC
-      LIMIT ?
-    `, [start, end, itemLimit]);
+   const results = await db.query(`
+  SELECT 
+    mi.id,
+    mi.name,
+    COALESCE(SUM(oi.quantity), 0) as total_quantity,
+    COALESCE(SUM(oi.quantity * mi.price), 0) as total_revenue,
+    COUNT(DISTINCT oi.id) as order_count
+  FROM menu_items mi
+  LEFT JOIN order_items oi ON mi.id = oi.menu_item_id
+  LEFT JOIN orders o 
+    ON oi.order_id = o.id 
+    AND o.payment_status = 'paid' 
+    AND o.order_time BETWEEN ? AND ?
+  GROUP BY mi.id, mi.name
+  HAVING total_quantity > 0
+  ORDER BY total_quantity DESC
+  LIMIT ${itemLimit}
+`, [start, end]);
     
     // Get category names separately
     const enhancedResults = [];
