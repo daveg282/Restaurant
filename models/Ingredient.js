@@ -46,33 +46,55 @@ static async getAll(filters = {}) {
   }
 }
 
+// models/Ingredient.js
 static async getCategories() {
   try {
     console.log('🔍 Running category query...');
     
-    // CORRECT: Destructure the first element which contains the rows
-    const [rows] = await db.query(`
+    // Don't destructure - get the raw result
+    const result = await db.query(`
       SELECT DISTINCT category 
       FROM ingredients 
       WHERE category IS NOT NULL 
         AND category != ''
-        AND category != 'null'
-        AND TRIM(category) != ''
       ORDER BY category ASC
     `);
     
-    console.log('📦 Raw rows:', rows);
+    console.log('📦 Raw result type:', typeof result);
+    console.log('📦 Raw result:', result);
     
-    // Now rows should be an array
+    // Handle different result types
+    let rows = [];
+    
+    if (Array.isArray(result)) {
+      // If it's an array, use it directly
+      rows = result;
+    } else if (result && typeof result === 'object') {
+      // If it's an object, check for rows property
+      rows = result.rows || [];
+    } else {
+      console.error('❌ Unexpected result type:', typeof result);
+      return [];
+    }
+    
+    // Ensure rows is an array
     if (!Array.isArray(rows)) {
       console.error('❌ Rows is not an array:', rows);
       return [];
     }
     
-    // Map the rows to get just the category values
+    console.log('📊 Processed rows:', rows);
+    
+    // Extract categories
     const categoryList = rows
-      .map(row => row.category)
-      .filter(category => category && typeof category === 'string');
+      .map(row => {
+        // Handle if row is a string or object
+        if (typeof row === 'string') return row;
+        if (row && typeof row === 'object') return row.category;
+        return null;
+      })
+      .filter(cat => cat && typeof cat === 'string' && cat.trim() !== '')
+      .map(cat => cat.trim());
     
     console.log(`✅ Found ${categoryList.length} categories:`, categoryList);
     
@@ -80,7 +102,7 @@ static async getCategories() {
     
   } catch (error) {
     console.error('❌ Error in Ingredient.getCategories:', error);
-    return []; // Return empty array on error
+    return [];
   }
 }
   // Get ingredient by ID with ALL details
