@@ -127,15 +127,34 @@ static async create(orderData, items, userId) {
   }
 }
 
-  // Get all orders with filters
- static async getAll(filters = {}) {
+// ==================== FIXED: getAll() with single query ====================
+static async getAll(filters = {}) {
   try {
-    // Get orders WITH their items - ALWAYS
+    // Base query with all joins - single query eliminates N+1 problem
     let sql = `
       SELECT 
         o.*, 
         t.table_number, 
-        u.username as waiter_name
+        u.username as waiter_name,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', oi.id,
+              'menu_item_id', oi.menu_item_id,
+              'item_name', mi.name,
+              'quantity', oi.quantity,
+              'price', oi.price,
+              'status', oi.status,
+              'special_instructions', oi.special_instructions,
+              'preparation_time', mi.preparation_time,
+              'category_name', c.name
+            )
+          )
+          FROM order_items oi
+          LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+          LEFT JOIN categories c ON mi.category_id = c.id
+          WHERE oi.order_id = o.id
+        ) as items_json
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
@@ -144,7 +163,7 @@ static async create(orderData, items, userId) {
     
     const params = [];
     
-    // Apply filters (keep your existing filters)
+    // Apply filters
     if (filters.status) {
       sql += ' AND o.status = ?';
       params.push(filters.status);
@@ -177,413 +196,80 @@ static async create(orderData, items, userId) {
     
     sql += ' ORDER BY o.order_time DESC';
     
+    // Add pagination
     if (filters.limit) {
       sql += ' LIMIT ?';
       params.push(filters.limit);
     }
     
-    // Get the orders first
-    const orders = await db.query(sql, params);
-    
-    // Then get items for EACH order - THIS IS THE FIX!
-    for (let order of orders) {
-      const itemsSql = `
-        SELECT 
-          oi.id,
-          oi.menu_item_id,
-          mi.name as item_name,
-          oi.quantity,
-          mi.price,
-          oi.status,
-          oi.special_instructions,
-          mi.preparation_time,
-          c.name as category_name
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        LEFT JOIN categories c ON mi.category_id = c.id
-        WHERE oi.order_id = ?
-        ORDER BY oi.id
-      `;
-      
-      const items = await db.query(itemsSql, [order.id]);
-      order.items = items || []; // ALWAYS include items array (even if empty)
+    if (filters.offset) {
+      sql += ' OFFSET ?';
+      params.push(filters.offset);
     }
     
-    return orders;
+    const orders = await db.query(sql, params);
+    
+    // Parse JSON items for each order
+    return orders.map(order => ({
+      ...order,
+      items: order.items_json ? JSON.parse(order.items_json) : []
+    }));
     
   } catch (error) {
     throw new Error(`Error getting orders: ${error.message}`);
   }
 }
 
-  // Get order by ID with items
-  static async findById(id) {
-    try {
-      // Get order details
-      const orderSql = `
-        SELECT o.*, t.table_number, 
-               u1.username as waiter_name, 
-               u2.username as cashier_name
-        FROM orders o
-        LEFT JOIN tables t ON o.table_id = t.id
-        LEFT JOIN users u1 ON o.waiter_id = u1.id
-        LEFT JOIN users u2 ON o.cashier_id = u2.id
-        WHERE o.id = ?
-      `;
-      
-      const order = await db.queryOne(orderSql, [id]);
-      
-      if (!order) return null;
-      
-      // Get order items
-      const itemsSql = `
-        SELECT oi.*, mi.name as menu_item_name, mi.image
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        WHERE oi.order_id = ?
-        ORDER BY oi.id
-      `;
-      
-      const items = await db.query(itemsSql, [id]);
-      
-      return {
-        ...order,
-        items
-      };
-    } catch (error) {
-      throw new Error(`Error finding order: ${error.message}`);
-    }
-  }
-
-  // Get order by order number
-  static async findByOrderNumber(orderNumber) {
-    try {
-      const sql = 'SELECT * FROM orders WHERE order_number = ?';
-      return await db.queryOne(sql, [orderNumber]);
-    } catch (error) {
-      throw new Error(`Error finding order: ${error.message}`);
-    }
-  }
-
-  // Update order status
-  static async updateStatus(id, status, userId = null, role = null) {
-    try {
-      const updates = ['status = ?'];
-      const params = [status, id];
-      
-      if (status === 'preparing') {
-        updates.push('estimated_ready_time = DATE_ADD(NOW(), INTERVAL 30 MINUTE)');
-      }
-      
-      if (status === 'ready') {
-        updates.push('actual_ready_time = NOW()');
-        
-        // Buzz pager if assigned
-        const order = await this.findById(id);
-        if (order && order.pager_number) {
-          console.log(`🛎️ Buzzing pager #${order.pager_number} for order ${order.order_number}`);
-          // In real system, trigger physical pager
-        }
-      }
-      
-      if (status === 'completed') {
-        updates.push('completed_time = NOW()');
-        
-        // Free the table
-        const order = await this.findById(id);
-        if (order && order.table_id) {
-          await db.execute(
-            'UPDATE tables SET status = "available", customer_count = 0 WHERE id = ?',
-            [order.table_id]
-          );
-        }
-        
-        // Release pager if assigned
-        if (order && order.pager_number) {
-          await db.execute(
-            'UPDATE pagers SET status = "available", order_id = NULL, assigned_at = NULL WHERE pager_number = ?',
-            [order.pager_number]
-          );
-        }
-      }
-      
-      const sql = `UPDATE orders SET ${updates.join(', ')} WHERE id = ?`;
-      await db.execute(sql, params);
-      
-      return await this.findById(id);
-    } catch (error) {
-      throw new Error(`Error updating order status: ${error.message}`);
-    }
-  }
-
-  // Update order payment status
-  static async updatePaymentStatus(id, paymentData, cashierId) {
-    try {
-      const updates = ['payment_status = ?', 'payment_method = ?', 'cashier_id = ?'];
-      const params = [
-        paymentData.payment_status || 'paid',
-        paymentData.payment_method || 'cash',
-        cashierId,
-        id
-      ];
-      
-      if (paymentData.tip !== undefined) {
-        updates.push('tip = ?');
-        params.splice(3, 0, paymentData.tip);
-      }
-      
-      if (paymentData.discount !== undefined) {
-        updates.push('discount = ?');
-        params.splice(4, 0, paymentData.discount);
-      }
-      
-      if (paymentData.split_count !== undefined) {
-        updates.push('split_count = ?');
-        params.splice(5, 0, paymentData.split_count);
-      }
-      
-      const sql = `UPDATE orders SET ${updates.join(', ')} WHERE id = ?`;
-      await db.execute(sql, params);
-      
-      return await this.findById(id);
-    } catch (error) {
-      throw new Error(`Error updating payment status: ${error.message}`);
-    }
-  }
-
-  // Get kitchen orders (preparing/ready)
-  // In order.js - FIX getKitchenOrders()
-static async getKitchenOrders() {
+// Get order by ID with items
+static async findById(id) {
   try {
-    // 1. Get basic order info - ADD o.status!
-    const ordersSql = `
-      SELECT 
-        o.id,
-        o.order_number,
-        o.order_time,
-        o.table_id,
-        o.status,  // ← ADD THIS LINE!
-        t.table_number
+    // Get order details
+    const orderSql = `
+      SELECT o.*, t.table_number, 
+             u1.username as waiter_name, 
+             u2.username as cashier_name
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
-      WHERE o.status IN ('pending', 'preparing', 'ready')
-      ORDER BY o.order_time ASC
+      LEFT JOIN users u1 ON o.waiter_id = u1.id
+      LEFT JOIN users u2 ON o.cashier_id = u2.id
+      WHERE o.id = ?
     `;
     
-    const orders = await db.query(ordersSql);
+    const order = await db.queryOne(orderSql, [id]);
     
-    // 2. Get items for each order
-    for (let order of orders) {
-      const itemsSql = `
-      SELECT 
-  oi.id,
-  oi.menu_item_id,
-  mi.name as item_name,
-  oi.quantity,
-  oi.status,  // Item status
-  oi.special_instructions,
-  mi.preparation_time,
-  c.name as category_name
-FROM order_items oi
-LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-LEFT JOIN categories c ON mi.category_id = c.id
-WHERE oi.order_id = ?
-ORDER BY oi.status ASC
-      `;
-      
-      order.items = await db.query(itemsSql, [order.id]);
-    }
+    if (!order) return null;
     
-    return orders;
-  } catch (error) {
-    throw new Error(`Error getting kitchen orders: ${error.message}`);
-  }
-}
-
-  // Update order item status (for kitchen)
- static async updateOrderStatus(orderId, status) {
-  try {
-    // Update the order status in orders table
-    const sql = 'UPDATE orders SET status = ? WHERE id = ?';
-    await db.execute(sql, [status, orderId]);
+    // Get order items
+    const itemsSql = `
+      SELECT oi.*, mi.name as menu_item_name, mi.image
+      FROM order_items oi
+      LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+      WHERE oi.order_id = ?
+      ORDER BY oi.id
+    `;
     
-    // Also update all order items to match the new order status
-    const updateItemsSql = 'UPDATE order_items SET status = ? WHERE order_id = ?';
-    await db.execute(updateItemsSql, [status, orderId]);
+    const items = await db.query(itemsSql, [id]);
     
-    return { 
-      success: true,
-      message: `Order ${orderId} status updated to ${status}`,
-      order_id: orderId,
-      status: status
+    return {
+      ...order,
+      items
     };
   } catch (error) {
-    throw new Error(`Error updating order status: ${error.message}`);
+    throw new Error(`Error finding order: ${error.message}`);
   }
 }
 
-  // Cancel order
-  static async cancel(id, reason = '') {
-    try {
-      const order = await this.findById(id);
-      
-      if (!order) {
-        throw new Error('Order not found');
-      }
-      
-      if (order.status === 'completed') {
-        throw new Error('Cannot cancel completed order');
-      }
-      
-      // Update order status
-      await this.updateStatus(id, 'cancelled');
-      
-      // Free table if occupied
-      if (order.table_id) {
-        await db.execute(
-          'UPDATE tables SET status = "available", customer_count = 0 WHERE id = ?',
-          [order.table_id]
-        );
-      }
-      
-      // Release pager if assigned
-      if (order.pager_number) {
-        await db.execute(
-          'UPDATE pagers SET status = "available", order_id = NULL, assigned_at = NULL WHERE pager_number = ?',
-          [order.pager_number]
-        );
-      }
-      
-      return { 
-        message: 'Order cancelled successfully',
-        reason: reason || 'No reason provided'
-      };
-    } catch (error) {
-      throw new Error(`Error cancelling order: ${error.message}`);
-    }
-  }
-
-  // Get order statistics
-  static async getStats(timeRange = 'today') {
-    try {
-      let dateFilter = '';
-      const params = [];
-      
-      switch (timeRange) {
-        case 'today':
-          dateFilter = 'DATE(order_time) = CURDATE()';
-          break;
-        case 'week':
-          dateFilter = 'order_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)';
-          break;
-        case 'month':
-          dateFilter = 'order_time >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
-          break;
-        default:
-          dateFilter = '1=1';
-      }
-      
-      const sql = `
-        SELECT 
-          COUNT(*) as total_orders,
-          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
-          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
-          SUM(CASE WHEN status = 'preparing' THEN 1 ELSE 0 END) as preparing_orders,
-          SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) as ready_orders,
-          SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_orders,
-          SUM(total_amount) as total_revenue,
-          AVG(total_amount) as average_order_value,
-          MIN(total_amount) as min_order_value,
-          MAX(total_amount) as max_order_value,
-          SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
-          SUM(CASE WHEN payment_status = 'pending' THEN 1 ELSE 0 END) as pending_payment_orders
-        FROM orders
-        WHERE ${dateFilter}
-      `;
-      
-      return await db.queryOne(sql, params);
-    } catch (error) {
-      throw new Error(`Error getting order stats: ${error.message}`);
-    }
-  }
-
-  // Search orders
-  static async search(query) {
-    try {
-      const sql = `
-        SELECT o.*, t.table_number, u.username as waiter_name
-        FROM orders o
-        LEFT JOIN tables t ON o.table_id = t.id
-        LEFT JOIN users u ON o.waiter_id = u.id
-        WHERE o.order_number LIKE ? 
-           OR o.customer_name LIKE ?
-           OR t.table_number LIKE ?
-        ORDER BY o.order_time DESC
-        LIMIT 50
-      `;
-      const searchTerm = `%${query}%`;
-      return await db.query(sql, [searchTerm, searchTerm, searchTerm]);
-    } catch (error) {
-      throw new Error(`Error searching orders: ${error.message}`);
-    }
-  }
-  // Get all orders for kitchen display
-// Get kitchen orders - SIMPLE VERSION
-static async getKitchenOrders() {
+// Get order by order number
+static async findByOrderNumber(orderNumber) {
   try {
-    // 1. Get basic order info
-    const ordersSql = `
-      SELECT 
-        o.id,
-        o.order_number,
-        o.order_time,
-        o.table_id,
-        t.table_number
-      FROM orders o
-      LEFT JOIN tables t ON o.table_id = t.id
-      WHERE o.status IN ('pending', 'preparing', 'ready')
-      ORDER BY o.order_time ASC
-    `;
-    
-    const orders = await db.query(ordersSql);
-    
-    // 2. Get items for each order
-    for (let order of orders) {
-      const itemsSql = `
-        SELECT 
-          oi.id,
-          oi.menu_item_id,
-          mi.name as item_name,
-          oi.quantity,
-          oi.status,
-          oi.special_instructions,
-          mi.preparation_time,
-          c.name as category_name
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        LEFT JOIN categories c ON mi.category_id = c.id
-        WHERE oi.order_id = ?
-          AND oi.status IN ('pending', 'preparing', 'ready')
-        ORDER BY oi.status ASC
-      `;
-      
-      order.items = await db.query(itemsSql, [order.id]);
-    }
-    
-    return orders;
-    
+    const sql = 'SELECT * FROM orders WHERE order_number = ?';
+    return await db.queryOne(sql, [orderNumber]);
   } catch (error) {
-    // If even simple queries fail, MariaDB needs fixing
-    console.error('Kitchen orders error - MariaDB needs mysql_upgrade:', error.message);
-    
-    // Provide helpful error
-    throw new Error(
-      'MariaDB system tables corrupted. Please run: sudo mariadb-upgrade --force -u root -p\n' +
-      'Or contact your server administrator to fix mysql.proc table.'
-    );
+    throw new Error(`Error finding order: ${error.message}`);
   }
 }
 
+// Update order status
 static async updateStatus(id, status, userId = null, role = null) {
   try {
     console.log('=== UPDATING ORDER STATUS ===');
@@ -603,8 +289,11 @@ static async updateStatus(id, status, userId = null, role = null) {
       updates.push('actual_ready_time = NOW()');
       console.log('Set actual ready time');
       
-      // Optional: Also update all items to "ready" if you want
-      // await db.execute('UPDATE order_items SET status = "ready" WHERE order_id = ?', [id]);
+      // Buzz pager if assigned
+      const order = await this.findById(id);
+      if (order && order.pager_number) {
+        console.log(`🛎️ Buzzing pager #${order.pager_number} for order ${order.order_number}`);
+      }
     }
     
     if (status === 'completed') {
@@ -640,6 +329,248 @@ static async updateStatus(id, status, userId = null, role = null) {
     throw new Error(`Error updating order status: ${error.message}`);
   }
 }
+
+// Update order payment status
+static async updatePaymentStatus(id, paymentData, cashierId) {
+  try {
+    const updates = ['payment_status = ?', 'payment_method = ?', 'cashier_id = ?'];
+    const params = [
+      paymentData.payment_status || 'paid',
+      paymentData.payment_method || 'cash',
+      cashierId,
+      id
+    ];
+    
+    if (paymentData.tip !== undefined) {
+      updates.push('tip = ?');
+      params.splice(3, 0, paymentData.tip);
+    }
+    
+    if (paymentData.discount !== undefined) {
+      updates.push('discount = ?');
+      params.splice(4, 0, paymentData.discount);
+    }
+    
+    if (paymentData.split_count !== undefined) {
+      updates.push('split_count = ?');
+      params.splice(5, 0, paymentData.split_count);
+    }
+    
+    const sql = `UPDATE orders SET ${updates.join(', ')} WHERE id = ?`;
+    await db.execute(sql, params);
+    
+    return await this.findById(id);
+  } catch (error) {
+    throw new Error(`Error updating payment status: ${error.message}`);
+  }
+}
+
+// ==================== FIXED: getKitchenOrders() with single query ====================
+static async getKitchenOrders() {
+  try {
+    const sql = `
+      SELECT 
+        o.id,
+        o.order_number,
+        o.order_time,
+        o.table_id,
+        o.status,
+        t.table_number,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', oi.id,
+              'menu_item_id', oi.menu_item_id,
+              'item_name', mi.name,
+              'quantity', oi.quantity,
+              'status', oi.status,
+              'special_instructions', oi.special_instructions,
+              'preparation_time', mi.preparation_time,
+              'category_name', c.name
+            )
+          )
+          FROM order_items oi
+          LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+          LEFT JOIN categories c ON mi.category_id = c.id
+          WHERE oi.order_id = o.id
+            AND oi.status IN ('pending', 'preparing', 'ready')
+        ) as items_json
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      WHERE o.status IN ('pending', 'preparing', 'ready')
+      ORDER BY o.order_time ASC
+    `;
+    
+    const orders = await db.query(sql);
+    
+    // Parse JSON items and filter out nulls
+    return orders.map(order => ({
+      ...order,
+      items: (JSON.parse(order.items_json || '[]')).filter(item => item.id)
+    }));
+    
+  } catch (error) {
+    console.error('Kitchen orders error:', error.message);
+    throw new Error(`Error getting kitchen orders: ${error.message}`);
+  }
+}
+
+// Update order item status (for kitchen)
+static async updateOrderStatus(orderId, status) {
+  try {
+    // Update the order status in orders table
+    const sql = 'UPDATE orders SET status = ? WHERE id = ?';
+    await db.execute(sql, [status, orderId]);
+    
+    // Also update all order items to match the new order status
+    const updateItemsSql = 'UPDATE order_items SET status = ? WHERE order_id = ?';
+    await db.execute(updateItemsSql, [status, orderId]);
+    
+    return { 
+      success: true,
+      message: `Order ${orderId} status updated to ${status}`,
+      order_id: orderId,
+      status: status
+    };
+  } catch (error) {
+    throw new Error(`Error updating order status: ${error.message}`);
+  }
+}
+
+// Cancel order
+static async cancel(id, reason = '') {
+  try {
+    const order = await this.findById(id);
+    
+    if (!order) {
+      throw new Error('Order not found');
+    }
+    
+    if (order.status === 'completed') {
+      throw new Error('Cannot cancel completed order');
+    }
+    
+    // Update order status
+    await this.updateStatus(id, 'cancelled');
+    
+    // Free table if occupied
+    if (order.table_id) {
+      await db.execute(
+        'UPDATE tables SET status = "available", customer_count = 0 WHERE id = ?',
+        [order.table_id]
+      );
+    }
+    
+    // Release pager if assigned
+    if (order.pager_number) {
+      await db.execute(
+        'UPDATE pagers SET status = "available", order_id = NULL, assigned_at = NULL WHERE pager_number = ?',
+        [order.pager_number]
+      );
+    }
+    
+    return { 
+      message: 'Order cancelled successfully',
+      reason: reason || 'No reason provided'
+    };
+  } catch (error) {
+    throw new Error(`Error cancelling order: ${error.message}`);
+  }
+}
+
+// ==================== FIXED: getStats() with optimized query ====================
+static async getStats(timeRange = 'today') {
+  try {
+    let dateFilter = '';
+    const params = [];
+    
+    switch (timeRange) {
+      case 'today':
+        dateFilter = 'DATE(order_time) = CURDATE()';
+        break;
+      case 'week':
+        dateFilter = 'order_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)';
+        break;
+      case 'month':
+        dateFilter = 'order_time >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
+        break;
+      default:
+        dateFilter = '1=1';
+    }
+    
+    const sql = `
+      SELECT 
+        COUNT(*) as total_orders,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
+        SUM(CASE WHEN status = 'preparing' THEN 1 ELSE 0 END) as preparing_orders,
+        SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) as ready_orders,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_orders,
+        SUM(total_amount) as total_revenue,
+        AVG(total_amount) as average_order_value,
+        MIN(total_amount) as min_order_value,
+        MAX(total_amount) as max_order_value,
+        SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
+        SUM(CASE WHEN payment_status = 'pending' THEN 1 ELSE 0 END) as pending_payment_orders
+      FROM orders
+      WHERE ${dateFilter}
+    `;
+    
+    return await db.queryOne(sql, params);
+  } catch (error) {
+    throw new Error(`Error getting order stats: ${error.message}`);
+  }
+}
+
+// ==================== FIXED: searchOrders() with FULLTEXT search ====================
+static async search(query) {
+  try {
+    // First, try FULLTEXT search if available (much faster)
+    try {
+      const fulltextSql = `
+        SELECT o.*, t.table_number, u.username as waiter_name,
+               MATCH(o.order_number, o.customer_name) AGAINST(?) as relevance
+        FROM orders o
+        LEFT JOIN tables t ON o.table_id = t.id
+        LEFT JOIN users u ON o.waiter_id = u.id
+        WHERE MATCH(o.order_number, o.customer_name) AGAINST(? IN BOOLEAN MODE)
+        ORDER BY relevance DESC
+        LIMIT 50
+      `;
+      
+      // Add wildcards for partial matching
+      const searchTerm = `*${query}*`;
+      const results = await db.query(fulltextSql, [query, searchTerm]);
+      
+      if (results.length > 0) {
+        return results;
+      }
+    } catch (fulltextError) {
+      // Fall back to LIKE if FULLTEXT not available
+      console.log('FULLTEXT not available, using LIKE fallback');
+    }
+    
+    // Fallback to LIKE search with indexes
+    const likeSql = `
+      SELECT o.*, t.table_number, u.username as waiter_name
+      FROM orders o
+      LEFT JOIN tables t ON o.table_id = t.id
+      LEFT JOIN users u ON o.waiter_id = u.id
+      WHERE o.order_number LIKE ? 
+         OR o.customer_name LIKE ?
+         OR t.table_number LIKE ?
+      ORDER BY o.order_time DESC
+      LIMIT 50
+    `;
+    
+    const searchTerm = `%${query}%`;
+    return await db.query(likeSql, [searchTerm, searchTerm, searchTerm]);
+    
+  } catch (error) {
+    throw new Error(`Error searching orders: ${error.message}`);
+  }
+}
+
 // Get orders by station/category
 static async getOrdersByStation(stationName) {
   try {
@@ -651,13 +582,32 @@ static async getOrdersByStation(stationName) {
       return []; // No such station/category
     }
     
-    // Get orders with items from this category
-    const ordersSql = `
-      SELECT DISTINCT
+    // Optimized single query with JSON aggregation
+    const sql = `
+      SELECT 
         o.id,
         o.order_number,
         t.table_number,
-        o.order_time
+        o.order_time,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', oi.id,
+              'menu_item_id', oi.menu_item_id,
+              'name', mi.name,
+              'quantity', oi.quantity,
+              'status', oi.status,
+              'special_instructions', oi.special_instructions,
+              'category_name', c.name,
+              'category_id', c.id
+            )
+          )
+          FROM order_items oi
+          LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+          LEFT JOIN categories c ON mi.category_id = c.id
+          WHERE oi.order_id = o.id
+            AND oi.status IN ('pending', 'preparing')
+        ) as all_items_json
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN order_items oi ON o.id = oi.order_id
@@ -665,55 +615,46 @@ static async getOrdersByStation(stationName) {
       WHERE o.status IN ('pending', 'preparing', 'ready')
         AND oi.status IN ('pending', 'preparing')
         AND mi.category_id = ?
+      GROUP BY o.id
       ORDER BY o.order_time ASC
     `;
     
-    const orders = await db.query(ordersSql, [category.id]);
+    const orders = await db.query(sql, [category.id]);
     
-    // Get ALL items for each order (not filtered by station)
-    for (let order of orders) {
-      const itemsSql = `
-        SELECT 
-          oi.id,
-          oi.menu_item_id,
-          mi.name,
-          oi.quantity,
-          oi.status,
-          oi.special_instructions,
-          c.name as category_name,
-          c.id as category_id
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        LEFT JOIN categories c ON mi.category_id = c.id
-        WHERE oi.order_id = ?
-          AND oi.status IN ('pending', 'preparing')
-        ORDER BY oi.id
-      `;
-      
-      const allItems = await db.query(itemsSql, [order.id]);
-      
-      // Filter items to show only this station's items FIRST
-      order.items = allItems.filter(item => 
-        item.category_id === category.id
-      );
-      
-      // Also include other station's items but mark them
-      order.other_items = allItems.filter(item => 
-        item.category_id !== category.id
-      );
-    }
-    
-    return orders;
+    // Parse and split items
+    return orders.map(order => {
+      const allItems = JSON.parse(order.all_items_json || '[]');
+      return {
+        ...order,
+        items: allItems.filter(item => item.category_id === category.id),
+        other_items: allItems.filter(item => item.category_id !== category.id)
+      };
+    });
     
   } catch (error) {
     throw new Error(`Error getting station orders: ${error.message}`);
   }
 }
+
 // Get orders ready for payment
 static async getPendingPayments() {
   try {
     const sql = `
-      SELECT o.*, t.table_number, u.username as waiter_name
+      SELECT o.*, t.table_number, u.username as waiter_name,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', oi.id,
+              'menu_item_id', oi.menu_item_id,
+              'menu_item_name', mi.name,
+              'quantity', oi.quantity,
+              'price', oi.price
+            )
+          )
+          FROM order_items oi
+          LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+          WHERE oi.order_id = o.id
+        ) as items_json
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       LEFT JOIN users u ON o.waiter_id = u.id
@@ -724,20 +665,11 @@ static async getPendingPayments() {
     
     const orders = await db.query(sql);
     
-    // Get items for each order
-    for (let order of orders) {
-      const itemsSql = `
-        SELECT oi.*, mi.name as menu_item_name
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        WHERE oi.order_id = ?
-        ORDER BY oi.id
-      `;
-      
-      order.items = await db.query(itemsSql, [order.id]);
-    }
+    return orders.map(order => ({
+      ...order,
+      items: JSON.parse(order.items_json || '[]')
+    }));
     
-    return orders;
   } catch (error) {
     throw new Error(`Error getting pending payments: ${error.message}`);
   }
@@ -844,6 +776,7 @@ static async processPayment(orderId, paymentData, cashierId) {
     throw new Error(`Error processing payment: ${error.message}`);
   }
 }
+
 // Get urgent orders (older than 20 minutes)
 static async getUrgentOrders() {
   try {
@@ -851,7 +784,22 @@ static async getUrgentOrders() {
       SELECT 
         o.*,
         t.table_number,
-        TIMESTAMPDIFF(MINUTE, o.order_time, NOW()) as minutes_old
+        TIMESTAMPDIFF(MINUTE, o.order_time, NOW()) as minutes_old,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', oi.id,
+              'menu_item_id', oi.menu_item_id,
+              'menu_item_name', mi.name,
+              'quantity', oi.quantity,
+              'status', oi.status
+            )
+          )
+          FROM order_items oi
+          LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+          WHERE oi.order_id = o.id
+            AND oi.status IN ('pending', 'preparing')
+        ) as items_json
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       WHERE o.status IN ('pending', 'preparing')
@@ -861,21 +809,11 @@ static async getUrgentOrders() {
     
     const orders = await db.query(sql);
     
-    // Get items for each order
-    for (let order of orders) {
-      const itemsSql = `
-        SELECT oi.*, mi.name as menu_item_name
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        WHERE oi.order_id = ?
-          AND oi.status IN ('pending', 'preparing')
-        ORDER BY oi.id
-      `;
-      
-      order.items = await db.query(itemsSql, [order.id]);
-    }
+    return orders.map(order => ({
+      ...order,
+      items: JSON.parse(order.items_json || '[]')
+    }));
     
-    return orders;
   } catch (error) {
     throw new Error(`Error getting urgent orders: ${error.message}`);
   }
@@ -946,16 +884,35 @@ static async getPopularItems(limit = 5) {
     throw new Error(`Error getting popular items: ${error.message}`);
   }
 }
-// Get waiter's daily orders with statistics
+
+// ==================== FIXED: getWaiterDailyOrders() with optimized queries ====================
 static async getWaiterDailyOrders(waiterId, date = null) {
   try {
     const targetDate = date || new Date().toISOString().split('T')[0];
     
     console.log(`Getting daily orders for waiter ${waiterId}, date: ${targetDate}`);
     
-    // Get orders for this waiter on the specified date
+    // Single query to get orders with items using JSON aggregation
     const ordersSql = `
-      SELECT o.*, t.table_number
+      SELECT 
+        o.*, 
+        t.table_number,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', oi.id,
+              'menu_item_id', oi.menu_item_id,
+              'menu_item_name', mi.name,
+              'quantity', oi.quantity,
+              'price', oi.price,
+              'status', oi.status,
+              'special_instructions', oi.special_instructions
+            )
+          )
+          FROM order_items oi
+          LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+          WHERE oi.order_id = o.id
+        ) as items_json
       FROM orders o
       LEFT JOIN tables t ON o.table_id = t.id
       WHERE o.waiter_id = ?
@@ -965,33 +922,36 @@ static async getWaiterDailyOrders(waiterId, date = null) {
     
     const orders = await db.query(ordersSql, [waiterId, targetDate]);
     
-    // Get summary statistics
-    const statsSql = `
+    // Parse items for each order
+    const parsedOrders = orders.map(order => ({
+      ...order,
+      items: JSON.parse(order.items_json || '[]')
+    }));
+    
+    // Get summary statistics in a single query
+    const summarySql = `
       SELECT 
         COUNT(*) as total_orders,
-        SUM(total_amount) as total_revenue,
+        COALESCE(SUM(total_amount), 0) as total_revenue,
         COUNT(DISTINCT table_id) as tables_served,
-        AVG(total_amount) as average_order_value,
+        COALESCE(AVG(total_amount), 0) as average_order_value,
         COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_orders,
         COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders,
-        COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_orders
+        COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_orders,
+        (
+          SELECT COALESCE(SUM(oi.quantity), 0)
+          FROM order_items oi
+          WHERE oi.order_id IN (
+            SELECT id FROM orders 
+            WHERE waiter_id = ? AND DATE(order_time) = ?
+          )
+        ) as items_sold
       FROM orders
       WHERE waiter_id = ?
         AND DATE(order_time) = ?
     `;
     
-    const stats = await db.queryOne(statsSql, [waiterId, targetDate]) || {};
-    
-    // Get item count (items sold)
-    const itemsSql = `
-      SELECT SUM(oi.quantity) as items_sold
-      FROM order_items oi
-      LEFT JOIN orders o ON oi.order_id = o.id
-      WHERE o.waiter_id = ?
-        AND DATE(o.order_time) = ?
-    `;
-    
-    const itemsResult = await db.queryOne(itemsSql, [waiterId, targetDate]) || {};
+    const summary = await db.queryOne(summarySql, [waiterId, targetDate, waiterId, targetDate]) || {};
     
     // Get top items
     const topItemsSql = `
@@ -1011,31 +971,18 @@ static async getWaiterDailyOrders(waiterId, date = null) {
     
     const topItems = await db.query(topItemsSql, [waiterId, targetDate]);
     
-    // Get detailed items for each order
-    for (let order of orders) {
-      const itemsSql = `
-        SELECT oi.*, mi.name as menu_item_name
-        FROM order_items oi
-        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
-        WHERE oi.order_id = ?
-        ORDER BY oi.id
-      `;
-      
-      order.items = await db.query(itemsSql, [order.id]);
-    }
-    
     return {
       date: targetDate,
-      orders,
+      orders: parsedOrders,
       summary: {
-        totalOrders: parseInt(stats.total_orders) || 0,
-        totalRevenue: parseFloat(stats.total_revenue || 0).toFixed(2),
-        itemsSold: parseInt(itemsResult.items_sold) || 0,
-        averageOrderValue: parseFloat(stats.average_order_value || 0).toFixed(2),
-        tablesServed: parseInt(stats.tables_served) || 0,
-        completedOrders: parseInt(stats.completed_orders) || 0,
-        cancelledOrders: parseInt(stats.cancelled_orders) || 0,
-        paidOrders: parseInt(stats.paid_orders) || 0
+        totalOrders: parseInt(summary.total_orders) || 0,
+        totalRevenue: parseFloat(summary.total_revenue || 0).toFixed(2),
+        itemsSold: parseInt(summary.items_sold) || 0,
+        averageOrderValue: parseFloat(summary.average_order_value || 0).toFixed(2),
+        tablesServed: parseInt(summary.tables_served) || 0,
+        completedOrders: parseInt(summary.completed_orders) || 0,
+        cancelledOrders: parseInt(summary.cancelled_orders) || 0,
+        paidOrders: parseInt(summary.paid_orders) || 0
       },
       topItems: topItems.map(item => ({
         name: item.name,
@@ -1049,7 +996,8 @@ static async getWaiterDailyOrders(waiterId, date = null) {
     throw new Error(`Error getting daily orders: ${error.message}`);
   }
 }
-// In Order.js - Update getSalesSummary method
+
+// ==================== FIXED: getSalesSummary() with optimized queries ====================
 static async getSalesSummary(filters = {}) {
   try {
     console.log('Getting sales summary with filters:', filters);
@@ -1057,9 +1005,10 @@ static async getSalesSummary(filters = {}) {
     let dateCondition = '1=1';
     const params = [];
     
-    // IMPORTANT CHANGE: Use payment_time instead of order_time for paid orders
     if (filters.period === 'today') {
       dateCondition = 'DATE(payment_time) = CURDATE()';
+    } else if (filters.period === 'yesterday') {
+      dateCondition = 'DATE(payment_time) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)';
     } else if (filters.period === 'week') {
       dateCondition = 'payment_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)';
     } else if (filters.period === 'month') {
@@ -1070,14 +1019,9 @@ static async getSalesSummary(filters = {}) {
     } else if (filters.start_date && filters.end_date) {
       dateCondition = 'DATE(payment_time) BETWEEN ? AND ?';
       params.push(filters.start_date, filters.end_date);
-    } else if (filters.period === 'yesterday') {
-      dateCondition = 'DATE(payment_time) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)';
-    } else if (filters.period === 'this_week') {
-      dateCondition = 'YEARWEEK(payment_time, 1) = YEARWEEK(CURDATE(), 1)';
-    } else if (filters.period === 'this_month') {
-      dateCondition = 'MONTH(payment_time) = MONTH(CURDATE()) AND YEAR(payment_time) = YEAR(CURDATE())';
     }
     
+    // Main summary query with all aggregations
     const summarySql = `
       SELECT 
         COUNT(*) as total_orders,
@@ -1092,13 +1036,17 @@ static async getSalesSummary(filters = {}) {
         COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total_amount ELSE 0 END), 0) as card_sales,
         COALESCE(SUM(CASE WHEN payment_method = 'mobile' THEN total_amount ELSE 0 END), 0) as mobile_sales,
         
-        -- Simple counts
+        -- Counts
         COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_orders,
         COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders,
-        COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_orders,
-        COUNT(CASE WHEN payment_status = 'pending' THEN 1 END) as pending_payment_orders,
         
-        -- New: Get first and last payment time for the period
+        -- Payment method counts as JSON
+        JSON_OBJECT(
+          'cash', COUNT(CASE WHEN payment_method = 'cash' THEN 1 END),
+          'card', COUNT(CASE WHEN payment_method = 'card' THEN 1 END),
+          'mobile', COUNT(CASE WHEN payment_method = 'mobile' THEN 1 END)
+        ) as payment_method_counts,
+        
         MIN(payment_time) as first_payment,
         MAX(payment_time) as last_payment
         
@@ -1108,27 +1056,7 @@ static async getSalesSummary(filters = {}) {
         AND ${dateCondition}
     `;
     
-    console.log('Summary SQL:', summarySql);
-    console.log('Params:', params);
-    
     const summary = await db.queryOne(summarySql, params);
-    console.log('Summary result:', summary);
-    
-    // Get payment methods
-    const paymentMethodsSql = `
-      SELECT 
-        payment_method,
-        COUNT(*) as count,
-        COALESCE(SUM(total_amount), 0) as total_amount
-      FROM orders
-      WHERE payment_status = 'paid'
-        AND payment_time IS NOT NULL
-        AND ${dateCondition}
-      GROUP BY payment_method
-      ORDER BY count DESC
-    `;
-    
-    const paymentMethods = await db.query(paymentMethodsSql, params);
     
     // Get top items
     const topItemsSql = `
@@ -1149,7 +1077,7 @@ static async getSalesSummary(filters = {}) {
     
     const topItems = await db.query(topItemsSql, params);
     
-    // Get detailed data for export - USE payment_time
+    // Get detailed data with pagination for large datasets
     const detailedSql = `
       SELECT 
         o.order_number,
@@ -1172,9 +1100,22 @@ static async getSalesSummary(filters = {}) {
         AND o.payment_time IS NOT NULL
         AND ${dateCondition}
       ORDER BY o.payment_time DESC
+      LIMIT 1000  -- Prevent overwhelming response
     `;
     
     const detailedData = await db.query(detailedSql, params);
+    
+    // Parse payment method counts
+    const paymentCounts = JSON.parse(summary.payment_method_counts || '{"cash":0,"card":0,"mobile":0}');
+    
+    // Build payment methods array
+    const paymentMethods = ['cash', 'card', 'mobile'].map(method => ({
+      payment_method: method,
+      count: parseInt(paymentCounts[method]) || 0,
+      total_amount: parseFloat(summary[`${method}_sales`]) || 0,
+      percentage: summary.total_orders > 0 ? 
+        Math.round((parseInt(paymentCounts[method]) / parseInt(summary.total_orders)) * 100) || 0 : 0
+    }));
     
     return {
       success: true,
@@ -1190,18 +1131,10 @@ static async getSalesSummary(filters = {}) {
         average_order_value: parseFloat(summary.average_order_value) || 0,
         completed_orders: parseInt(summary.completed_orders) || 0,
         cancelled_orders: parseInt(summary.cancelled_orders) || 0,
-        paid_orders: parseInt(summary.paid_orders) || 0,
-        pending_payment_orders: parseInt(summary.pending_payment_orders) || 0,
         first_payment: summary.first_payment || null,
         last_payment: summary.last_payment || null
       },
-      payment_methods: paymentMethods.map(method => ({
-        payment_method: method.payment_method,
-        count: parseInt(method.count) || 0,
-        total_amount: parseFloat(method.total_amount) || 0,
-        percentage: parseInt(summary.total_orders) > 0 ? 
-          Math.round((parseInt(method.count) / parseInt(summary.total_orders)) * 100) || 0 : 0
-      })),
+      payment_methods: paymentMethods,
       top_items: topItems.map(item => ({
         name: item.name || 'Unknown Item',
         quantity_sold: parseInt(item.quantity_sold) || 0,
@@ -1217,16 +1150,16 @@ static async getSalesSummary(filters = {}) {
   }
 }
 
-// Get daily sales report - STANDALONE SIMPLE VERSION
-// In Order.js - Update getDailySalesReport method
+// ==================== FIXED: getDailySalesReport() with optimized queries ====================
 static async getDailySalesReport(date = null) {
   try {
     const targetDate = date || new Date().toISOString().split('T')[0];
     console.log('Getting daily sales report for:', targetDate);
     
-    // 1. Get basic summary for the day - USE payment_time
-    const summarySql = `
+    // 1. Combined summary and hourly data query
+    const mainQuery = `
       SELECT 
+        -- Summary stats
         COUNT(*) as total_orders,
         COALESCE(SUM(total_amount), 0) as total_sales,
         COALESCE(SUM(tax), 0) as total_tax,
@@ -1234,9 +1167,33 @@ static async getDailySalesReport(date = null) {
         COALESCE(SUM(discount), 0) as total_discounts,
         COALESCE(AVG(total_amount), 0) as average_order_value,
         
+        -- Payment method breakdown
         COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total_amount ELSE 0 END), 0) as cash_sales,
         COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total_amount ELSE 0 END), 0) as card_sales,
-        COALESCE(SUM(CASE WHEN payment_method = 'mobile' THEN total_amount ELSE 0 END), 0) as mobile_sales
+        COALESCE(SUM(CASE WHEN payment_method = 'mobile' THEN total_amount ELSE 0 END), 0) as mobile_sales,
+        
+        -- Payment method counts
+        COUNT(CASE WHEN payment_method = 'cash' THEN 1 END) as cash_count,
+        COUNT(CASE WHEN payment_method = 'card' THEN 1 END) as card_count,
+        COUNT(CASE WHEN payment_method = 'mobile' THEN 1 END) as mobile_count,
+        
+        -- Hourly breakdown as JSON
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'hour', DATE_FORMAT(payment_time, '%H:00'),
+              'order_count', COUNT(*),
+              'total_sales', SUM(total_amount),
+              'avg_order_value', AVG(total_amount)
+            )
+          )
+          FROM orders
+          WHERE payment_status = 'paid' 
+            AND payment_time IS NOT NULL 
+            AND DATE(payment_time) = ?
+          GROUP BY DATE_FORMAT(payment_time, '%H')
+          ORDER BY hour
+        ) as hourly_json
         
       FROM orders
       WHERE payment_status = 'paid'
@@ -1244,42 +1201,9 @@ static async getDailySalesReport(date = null) {
         AND DATE(payment_time) = ?
     `;
     
-    const summary = await db.queryOne(summarySql, [targetDate]);
+    const mainResult = await db.queryOne(mainQuery, [targetDate, targetDate]);
     
-    // 2. Get hourly breakdown based on PAYMENT TIME
-    const hourlySql = `
-      SELECT 
-        DATE_FORMAT(payment_time, '%H:00') as hour,
-        COUNT(*) as order_count,
-        COALESCE(SUM(total_amount), 0) as total_sales,
-        COALESCE(AVG(total_amount), 0) as avg_order_value
-      FROM orders
-      WHERE payment_status = 'paid'
-        AND payment_time IS NOT NULL
-        AND DATE(payment_time) = ?
-      GROUP BY DATE_FORMAT(payment_time, '%H')
-      ORDER BY hour
-    `;
-    
-    const hourlyData = await db.query(hourlySql, [targetDate]);
-    
-    // 3. Get payment methods
-    const paymentMethodsSql = `
-      SELECT 
-        payment_method,
-        COUNT(*) as count,
-        COALESCE(SUM(total_amount), 0) as total_amount
-      FROM orders
-      WHERE payment_status = 'paid'
-        AND payment_time IS NOT NULL
-        AND DATE(payment_time) = ?
-      GROUP BY payment_method
-      ORDER BY count DESC
-    `;
-    
-    const paymentMethods = await db.query(paymentMethodsSql, [targetDate]);
-    
-    // 4. Get top items for the day
+    // 2. Top items query
     const topItemsSql = `
       SELECT 
         mi.name,
@@ -1298,7 +1222,7 @@ static async getDailySalesReport(date = null) {
     
     const topItems = await db.query(topItemsSql, [targetDate]);
     
-    // 5. Get tables performance
+    // 3. Tables performance query
     const tablesSql = `
       SELECT 
         COALESCE(t.table_number, 'Takeaway') as table_number,
@@ -1317,7 +1241,7 @@ static async getDailySalesReport(date = null) {
     
     const topTables = await db.query(tablesSql, [targetDate]);
     
-    // 6. Get cashier performance
+    // 4. Cashier performance query
     const cashiersSql = `
       SELECT 
         u.username as cashier_name,
@@ -1336,19 +1260,47 @@ static async getDailySalesReport(date = null) {
     
     const cashierPerformance = await db.query(cashiersSql, [targetDate]);
     
+    // Parse hourly data
+    const hourlyData = JSON.parse(mainResult.hourly_json || '[]');
+    
+    // Build payment methods array
+    const paymentMethods = [
+      {
+        payment_method: 'cash',
+        count: parseInt(mainResult.cash_count) || 0,
+        total_amount: parseFloat(mainResult.cash_sales) || 0,
+        percentage: mainResult.total_orders > 0 ? 
+          Math.round((parseInt(mainResult.cash_count) / parseInt(mainResult.total_orders)) * 100) : 0
+      },
+      {
+        payment_method: 'card',
+        count: parseInt(mainResult.card_count) || 0,
+        total_amount: parseFloat(mainResult.card_sales) || 0,
+        percentage: mainResult.total_orders > 0 ? 
+          Math.round((parseInt(mainResult.card_count) / parseInt(mainResult.total_orders)) * 100) : 0
+      },
+      {
+        payment_method: 'mobile',
+        count: parseInt(mainResult.mobile_count) || 0,
+        total_amount: parseFloat(mainResult.mobile_sales) || 0,
+        percentage: mainResult.total_orders > 0 ? 
+          Math.round((parseInt(mainResult.mobile_count) / parseInt(mainResult.total_orders)) * 100) : 0
+      }
+    ].filter(m => m.count > 0); // Only include methods that were used
+    
     return {
       success: true,
       date: targetDate,
       summary: {
-        total_orders: parseInt(summary.total_orders) || 0,
-        total_sales: parseFloat(summary.total_sales) || 0,
-        total_tax: parseFloat(summary.total_tax) || 0,
-        total_tips: parseFloat(summary.total_tips) || 0,
-        total_discounts: parseFloat(summary.total_discounts) || 0,
-        cash_sales: parseFloat(summary.cash_sales) || 0,
-        card_sales: parseFloat(summary.card_sales) || 0,
-        mobile_sales: parseFloat(summary.mobile_sales) || 0,
-        average_order_value: parseFloat(summary.average_order_value) || 0
+        total_orders: parseInt(mainResult.total_orders) || 0,
+        total_sales: parseFloat(mainResult.total_sales) || 0,
+        total_tax: parseFloat(mainResult.total_tax) || 0,
+        total_tips: parseFloat(mainResult.total_tips) || 0,
+        total_discounts: parseFloat(mainResult.total_discounts) || 0,
+        cash_sales: parseFloat(mainResult.cash_sales) || 0,
+        card_sales: parseFloat(mainResult.card_sales) || 0,
+        mobile_sales: parseFloat(mainResult.mobile_sales) || 0,
+        average_order_value: parseFloat(mainResult.average_order_value) || 0
       },
       hourly_breakdown: hourlyData.map(hour => ({
         hour: hour.hour || '00:00',
@@ -1356,13 +1308,7 @@ static async getDailySalesReport(date = null) {
         total_sales: parseFloat(hour.total_sales) || 0,
         avg_order_value: parseFloat(hour.avg_order_value) || 0
       })),
-      payment_methods: paymentMethods.map(method => ({
-        payment_method: method.payment_method || 'unknown',
-        count: parseInt(method.count) || 0,
-        total_amount: parseFloat(method.total_amount) || 0,
-        percentage: summary.total_orders > 0 ? 
-          Math.round((parseInt(method.count) / parseInt(summary.total_orders)) * 100) : 0
-      })),
+      payment_methods: paymentMethods,
       top_items: topItems.map(item => ({
         name: item.name || 'Unknown Item',
         quantity_sold: parseInt(item.quantity_sold) || 0,
