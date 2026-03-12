@@ -111,22 +111,12 @@ class ReportModel {
     }
   }
 
-  static async getTopSellingItems(startDate, endDate, limit = 10) {
+ static async getTopSellingItems(startDate, endDate, limit = 10) {
   try {
-    console.log('Popular items query dates:', startDate, 'to', endDate);
-    
-    // FIX: Convert dates to MySQL compatible format
-    const formattedStartDate = startDate instanceof Date 
-      ? startDate.toISOString().slice(0, 19).replace('T', ' ') 
-      : startDate;
-    const formattedEndDate = endDate instanceof Date 
-      ? endDate.toISOString().slice(0, 19).replace('T', ' ') 
-      : endDate;
+    console.log('Popular items query dates:', startDate.toISOString(), 'to', endDate.toISOString());
     
     // FIX: ensure limit is always an integer
     const safeLimit = parseInt(limit, 10) || 10;
-
-    console.log('Formatted dates:', formattedStartDate, 'to', formattedEndDate);
 
     const results = await db.query(`
       SELECT 
@@ -135,7 +125,7 @@ class ReportModel {
         c.name as category_name,
         COUNT(oi.id) as order_count,
         SUM(oi.quantity) as total_quantity,
-        SUM(oi.quantity * mi.price) as total_revenue
+        SUM(oi.quantity * mi.price) as total_revenue  // ← FIX: make sure this is * not =
       FROM order_items oi
       JOIN menu_items mi ON oi.menu_item_id = mi.id
       LEFT JOIN categories c ON mi.category_id = c.id
@@ -145,7 +135,7 @@ class ReportModel {
       GROUP BY mi.id, mi.name, c.name
       ORDER BY total_quantity DESC
       LIMIT ?
-    `, [formattedStartDate, formattedEndDate, safeLimit]);
+    `, [startDate, endDate, safeLimit]);
 
     console.log('Popular items found:', results.length);
     
