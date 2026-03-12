@@ -289,24 +289,24 @@ static async getRecentOrders(limit = 5) {
     const orderLimit = parseInt(limit) || 5;
     
     const results = await db.query(`
-      SELECT 
-        o.id,
-        o.order_number,
-        o.customer_name,
-        COALESCE(t.table_number, 'Takeaway') as table_display,
-        o.total_amount,
-        o.status,
-        o.payment_status,
-        o.order_time,
-        o.payment_method,
-        CONCAT(u.first_name, ' ', u.last_name) as waiter_name
-      FROM orders o
-      LEFT JOIN tables t ON o.table_id = t.id
-      LEFT JOIN users u ON o.waiter_id = u.id
-      WHERE o.payment_status = 'paid'
-      ORDER BY o.order_time DESC
-      LIMIT ?
-    `, [orderLimit]);
+  SELECT 
+    o.id,
+    o.order_number,
+    o.customer_name,
+    COALESCE(t.table_number, 'Takeaway') as table_display,
+    o.total_amount,
+    o.status,
+    o.payment_status,
+    o.order_time,
+    o.payment_method,
+    CONCAT(u.first_name, ' ', u.last_name) as waiter_name
+  FROM orders o
+  LEFT JOIN tables t ON o.table_id = t.id
+  LEFT JOIN users u ON o.waiter_id = u.id
+  WHERE o.payment_status = 'paid'
+  ORDER BY o.order_time DESC
+  LIMIT ${orderLimit}
+`);
     
     return results.map(row => ({
       id: row.id,
