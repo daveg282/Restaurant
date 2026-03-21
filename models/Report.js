@@ -3,10 +3,17 @@ const db = require('../config/db');
 class ReportModel {
   // ========== SALES QUERIES ==========
   
-  static async getSalesSummary(startDate, endDate) {
+  static async getSalesSummary(startDate, endDate, filters = {}) {
     try {
       console.log('Sales summary query dates:', startDate.toISOString(), 'to', endDate.toISOString());
-      
+
+      const params = [startDate, endDate];
+      let extra = '';
+      if (filters.payment_method) { extra += ' AND payment_method = ?'; params.push(filters.payment_method); }
+      if (filters.waiter_id)      { extra += ' AND waiter_id = ?';      params.push(filters.waiter_id); }
+      if (filters.min_amount)     { extra += ' AND total_amount >= ?';   params.push(parseFloat(filters.min_amount)); }
+      if (filters.max_amount)     { extra += ' AND total_amount <= ?';   params.push(parseFloat(filters.max_amount)); }
+
       const result = await db.queryOne(`
         SELECT 
           COUNT(DISTINCT id) as total_orders,
@@ -16,8 +23,8 @@ class ReportModel {
           COALESCE(COUNT(DISTINCT table_id), 0) as tables_served
         FROM orders 
         WHERE payment_status = 'paid'
-          AND order_time BETWEEN ? AND ?
-      `, [startDate, endDate]);
+          AND order_time BETWEEN ? AND ?${extra}
+      `, params);
 
       console.log('Sales summary result:', result);
       
@@ -34,7 +41,7 @@ class ReportModel {
     }
   }
 
-  static async getSalesByTimePeriod(startDate, endDate, groupBy = 'day') {
+  static async getSalesByTimePeriod(startDate, endDate, groupBy = 'day', filters = {}) {
     let groupByClause;
     switch (groupBy) {
       case 'hour':
@@ -54,6 +61,13 @@ class ReportModel {
     }
 
     try {
+      const params2 = [startDate, endDate];
+      let extra2 = '';
+      if (filters.payment_method) { extra2 += ' AND payment_method = ?'; params2.push(filters.payment_method); }
+      if (filters.waiter_id)      { extra2 += ' AND waiter_id = ?';      params2.push(filters.waiter_id); }
+      if (filters.min_amount)     { extra2 += ' AND total_amount >= ?';   params2.push(parseFloat(filters.min_amount)); }
+      if (filters.max_amount)     { extra2 += ' AND total_amount <= ?';   params2.push(parseFloat(filters.max_amount)); }
+
       const results = await db.query(`
         SELECT 
           ${groupByClause} as period,
@@ -63,10 +77,10 @@ class ReportModel {
           COALESCE(AVG(total_amount), 0) as avg_order_value
         FROM orders 
         WHERE payment_status = 'paid'
-          AND order_time BETWEEN ? AND ?
+          AND order_time BETWEEN ? AND ?${extra2}
         GROUP BY ${groupByClause}
         ORDER BY period
-      `, [startDate, endDate]);
+      `, params2);
 
       return results.map(row => ({
         period: row.period,
@@ -81,10 +95,16 @@ class ReportModel {
     }
   }
 
-  static async getCategoryBreakdown(startDate, endDate) {
+  static async getCategoryBreakdown(startDate, endDate, filters = {}) {
     try {
+      const params3 = [startDate, endDate];
+      let extra3 = '';
+      if (filters.payment_method) { extra3 += ' AND o.payment_method = ?'; params3.push(filters.payment_method); }
+      if (filters.waiter_id)      { extra3 += ' AND o.waiter_id = ?';      params3.push(filters.waiter_id); }
+
       const results = await db.query(`
         SELECT 
+          c.id as category_id,
           c.name as category_name,
           COUNT(oi.id) as item_count,
           SUM(oi.quantity) as total_quantity,
@@ -94,14 +114,15 @@ class ReportModel {
         LEFT JOIN categories c ON mi.category_id = c.id
         JOIN orders o ON oi.order_id = o.id
         WHERE o.payment_status = 'paid'
-          AND o.order_time BETWEEN ? AND ?
+          AND o.order_time BETWEEN ? AND ?${extra3}
         GROUP BY c.id, c.name
         ORDER BY total_revenue DESC
-      `, [startDate, endDate]);
+      `, params3);
 
       return results.map(row => ({
+        category_id:   row.category_id || null,
         category_name: row.category_name || 'Uncategorized',
-        item_count: parseInt(row.item_count || 0),
+        item_count:    parseInt(row.item_count || 0),
         total_quantity: parseInt(row.total_quantity || 0),
         total_revenue: parseFloat(row.total_revenue || 0)
       }));
@@ -111,7 +132,7 @@ class ReportModel {
     }
   }
 
- static async getTopSellingItems(startDate, endDate, limit = 10) {
+ static async getTopSellingItems(startDate, endDate, limit = 10, filters = {}) {
   let connection;
   try {
     console.log('Getting top items from', startDate, 'to', endDate);
@@ -130,44 +151,44 @@ class ReportModel {
     console.log('Using dates:', start, '-', end);
     
     // Simple query - no joins first to test
+   // Use INNER JOIN + WHERE so date filter is strict, not a LEFT JOIN hint
+   const params5 = [start, end];
+   let extra5 = '';
+   if (filters && filters.payment_method) { extra5 += ' AND o.payment_method = ?'; params5.push(filters.payment_method); }
+   if (filters && filters.waiter_id)      { extra5 += ' AND o.waiter_id = ?';      params5.push(filters.waiter_id); }
+   if (filters && filters.status)         { extra5 += ' AND o.status = ?';          params5.push(filters.status); }
+   if (filters && filters.category_name)  { extra5 += ' AND c.name = ?';            params5.push(filters.category_name); }
+
    const results = await db.query(`
   SELECT 
     mi.id,
     mi.name,
+    c.id as category_id,
+    c.name as category,
     COALESCE(SUM(oi.quantity), 0) as total_quantity,
     COALESCE(SUM(oi.quantity * mi.price), 0) as total_revenue,
     COUNT(DISTINCT oi.id) as order_count
-  FROM menu_items mi
-  LEFT JOIN order_items oi ON mi.id = oi.menu_item_id
-  LEFT JOIN orders o 
-    ON oi.order_id = o.id 
-    AND o.payment_status = 'paid' 
-    AND o.order_time BETWEEN ? AND ?
-  GROUP BY mi.id, mi.name
-  HAVING total_quantity > 0
+  FROM order_items oi
+  INNER JOIN menu_items mi ON mi.id = oi.menu_item_id
+  INNER JOIN orders o ON oi.order_id = o.id
+  LEFT JOIN categories c ON mi.category_id = c.id
+  WHERE o.payment_status = 'paid'
+    AND o.order_time BETWEEN ? AND ?${extra5}
+  GROUP BY mi.id, mi.name, c.id, c.name
   ORDER BY total_quantity DESC
   LIMIT ${itemLimit}
-`, [start, end]);
+`, params5);
     
-    // Get category names separately
-    const enhancedResults = [];
-    for (const row of results) {
-      const catResult = await db.queryOne(`
-        SELECT c.name FROM categories c 
-        JOIN menu_items mi ON mi.category_id = c.id 
-        WHERE mi.id = ?
-      `, [row.id]);
-      
-      enhancedResults.push({
-        id: row.id,
-        name: row.name,
-        category: catResult?.name || 'Uncategorized',
-        order_count: parseInt(row.order_count) || 0,
-        total_quantity: parseInt(row.total_quantity) || 0,
-        total_revenue: parseFloat(row.total_revenue) || 0
-      });
-    }
-    
+    const enhancedResults = results.map(row => ({
+      id:             row.id,
+      name:           row.name,
+      category_id:    row.category_id   || null,
+      category:       row.category      || 'Uncategorized',
+      order_count:    parseInt(row.order_count)    || 0,
+      total_quantity: parseInt(row.total_quantity) || 0,
+      total_revenue:  parseFloat(row.total_revenue) || 0
+    }));
+
     console.log(`Found ${enhancedResults.length} items`);
     return enhancedResults;
     
@@ -177,8 +198,15 @@ class ReportModel {
   }
 }
 
-  static async getPaymentMethodBreakdown(startDate, endDate) {
+  static async getPaymentMethodBreakdown(startDate, endDate, filters = {}) {
     try {
+      const params4 = [startDate, endDate];
+      let extra4 = '';
+      if (filters.payment_method) { extra4 += ' AND payment_method = ?'; params4.push(filters.payment_method); }
+      if (filters.waiter_id)      { extra4 += ' AND waiter_id = ?';      params4.push(filters.waiter_id); }
+      if (filters.min_amount)     { extra4 += ' AND total_amount >= ?';   params4.push(parseFloat(filters.min_amount)); }
+      if (filters.max_amount)     { extra4 += ' AND total_amount <= ?';   params4.push(parseFloat(filters.max_amount)); }
+
       const results = await db.query(`
         SELECT 
           payment_method,
@@ -186,10 +214,10 @@ class ReportModel {
           COALESCE(SUM(total_amount), 0) as total_sales
         FROM orders 
         WHERE payment_status = 'paid'
-          AND order_time BETWEEN ? AND ?
+          AND order_time BETWEEN ? AND ?${extra4}
         GROUP BY payment_method
         ORDER BY total_sales DESC
-      `, [startDate, endDate]);
+      `, params4);
 
       return results.map(row => ({
         payment_method: row.payment_method || 'unknown',

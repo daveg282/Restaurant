@@ -187,13 +187,15 @@ class BillingController {
         return res.status(404).json({ success: false, error: 'Order not found' });
       }
 
-      const subtotal = parseFloat(order.total_amount);
-      const VAT_RATE = 0.15;
-      const vatAmount = subtotal * VAT_RATE;
-      const totalWithVAT = subtotal + vatAmount;
-      const tip = parseFloat(order.tip || 0);
-      const discount = parseFloat(order.discount || 0);
-      const finalTotal = totalWithVAT + tip - discount;
+      // ─── VAT CALCULATION (prices are VAT-inclusive) ───────────────────────
+      // Back-calculate net and VAT component — do NOT add VAT on top again
+      const vatInclusiveTotal = parseFloat(order.total_amount);
+      const netAmount         = vatInclusiveTotal / 1.15;           // pre-VAT base
+      const vatAmount         = vatInclusiveTotal - netAmount;      // = total × 0.15/1.15
+      const tip               = parseFloat(order.tip      || 0);
+      const discount          = parseFloat(order.discount || 0);
+      const finalTotal        = vatInclusiveTotal + tip - discount; // VAT already baked in
+      // ─────────────────────────────────────────────────────────────────────
 
       let tableInfo = 'Takeaway';
       if (order.table) {
@@ -206,88 +208,406 @@ class BillingController {
         tableInfo = order.table_number;
       }
 
+      const orderDate = new Date(order.order_time || Date.now());
+      const payDate   = new Date(order.payment_time || Date.now());
+      const fmtDate   = orderDate.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+      const fmtTime   = orderDate.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+      const fmtPay    = payDate.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+
       const htmlReceipt = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Receipt #${order.order_number}</title>
-    <style>
-        body { font-family: 'Courier New', monospace; padding: 20px; max-width: 400px; margin: 0 auto; background: white; }
-        .receipt { border: 2px solid #000; padding: 20px; border-radius: 5px; }
-        .header { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 15px; margin-bottom: 20px; }
-        .restaurant-name { font-size: 24px; font-weight: bold; margin: 0; text-transform: uppercase; }
-        .restaurant-address { font-size: 14px; margin: 5px 0; text-transform: uppercase; }
-        .row { display: flex; justify-content: space-between; margin: 8px 0; padding: 4px 0; }
-        .items-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-        .items-table th { text-align: left; border-bottom: 1px solid #000; padding: 8px 0; font-weight: bold; }
-        .items-table td { padding: 6px 0; border-bottom: 1px dashed #ccc; }
-        .items-table tr:last-child td { border-bottom: none; }
-        .total-section { border-top: 2px solid #000; margin-top: 20px; padding-top: 15px; }
-        .highlight { font-weight: bold; font-size: 18px; }
-        .payment-info { background-color: #f5f5f5; padding: 15px; margin: 20px 0; border-radius: 5px; }
-        .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #666; }
-        .vat-note { font-size: 10px; color: #666; text-align: center; margin-top: 10px; }
-        .section-title { font-weight: bold; margin: 15px 0 8px 0; font-size: 16px; }
-        .amount-positive { color: #28a745; }
-        .amount-negative { color: #dc3545; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Receipt · ${order.order_number}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #e8e4dc;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 32px 16px;
+      font-family: 'IBM Plex Mono', monospace;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 420px;
+    }
+
+    /* ── Receipt card ── */
+    .receipt {
+      background: #faf8f4;
+      border: 1px solid #c8bfaf;
+      box-shadow: 0 2px 0 #bdb3a3, 0 6px 24px rgba(0,0,0,0.12);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Subtle corner marks */
+    .receipt::before, .receipt::after {
+      content: '';
+      position: absolute;
+      width: 18px; height: 18px;
+      border-color: #c0b49e;
+      border-style: solid;
+    }
+    .receipt::before { top: 10px; left: 10px; border-width: 2px 0 0 2px; }
+    .receipt::after  { bottom: 10px; right: 10px; border-width: 0 2px 2px 0; }
+
+    /* ── Header ── */
+    .header {
+      background: #1a1a1a;
+      color: #faf8f4;
+      text-align: center;
+      padding: 28px 24px 22px;
+      position: relative;
+    }
+    .header-badge {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 10px;
+    }
+    .restaurant-name {
+      font-family: 'Playfair Display', serif;
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      line-height: 1.1;
+      color: #ffffff;
+    }
+    .restaurant-sub {
+      font-size: 9.5px;
+      letter-spacing: 3.5px;
+      text-transform: uppercase;
+      color: #8a8a8a;
+      margin-top: 6px;
+    }
+    .header-divider {
+      width: 40px;
+      height: 1px;
+      background: #444;
+      margin: 14px auto;
+    }
+    .receipt-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #999;
+      letter-spacing: 0.5px;
+    }
+    .receipt-number {
+      color: #faf8f4;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 1px;
+    }
+
+    /* ── Tear edge ── */
+    .tear {
+      height: 12px;
+      background: repeating-linear-gradient(
+        90deg,
+        #faf8f4 0px, #faf8f4 8px,
+        #1a1a1a 8px, #1a1a1a 12px
+      );
+      opacity: 0.15;
+    }
+
+    /* ── Body padding ── */
+    .body { padding: 20px 24px; }
+
+    /* ── Section label ── */
+    .section-label {
+      font-size: 8.5px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #9a9080;
+      font-weight: 600;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #e0d9ce;
+    }
+
+    /* ── Info grid ── */
+    .info-grid { margin-bottom: 20px; }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 5px 0;
+      font-size: 11px;
+    }
+    .info-label { color: #9a9080; }
+    .info-value { color: #1a1a1a; font-weight: 500; text-align: right; max-width: 60%; }
+
+    /* ── Items table ── */
+    .items-section { margin-bottom: 4px; }
+    .items-table { width: 100%; border-collapse: collapse; }
+    .items-table thead tr th {
+      font-size: 8.5px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #9a9080;
+      font-weight: 600;
+      padding: 0 0 8px;
+      border-bottom: 1px dashed #c8bfaf;
+    }
+    .items-table thead tr th:last-child { text-align: right; }
+    .items-table thead tr th:nth-child(2),
+    .items-table thead tr th:nth-child(3) { text-align: center; }
+
+    .items-table tbody tr td {
+      padding: 9px 0;
+      font-size: 11.5px;
+      color: #1a1a1a;
+      border-bottom: 1px dashed #e4ddd3;
+      vertical-align: top;
+    }
+    .items-table tbody tr:last-child td { border-bottom: none; }
+    .item-name { font-weight: 500; line-height: 1.35; }
+    .item-qty  { text-align: center; color: #6a6055; }
+    .item-unit { text-align: center; color: #6a6055; }
+    .item-total { text-align: right; font-weight: 600; white-space: nowrap; }
+
+    /* ── Totals block ── */
+    .totals-block {
+      background: #f0ece4;
+      border: 1px solid #ddd6c8;
+      border-radius: 2px;
+      padding: 14px 16px;
+      margin: 18px 0;
+    }
+    .total-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      padding: 4px 0;
+      color: #4a4035;
+    }
+    .total-row.vat-row { color: #7a7065; font-size: 10.5px; font-style: italic; }
+    .total-row.tip-row { color: #2a6a3a; }
+    .total-row.disc-row { color: #8a2a1a; }
+    .total-separator {
+      border: none;
+      border-top: 1px solid #c8bfaf;
+      margin: 10px 0;
+    }
+    .total-row.grand {
+      font-size: 14px;
+      font-weight: 700;
+      color: #1a1a1a;
+      padding-top: 6px;
+      letter-spacing: 0.3px;
+    }
+
+    /* ── Payment pill ── */
+    .payment-block {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 14px;
+      border: 1px solid #c8bfaf;
+      margin-bottom: 18px;
+    }
+    .payment-method-label {
+      font-size: 8.5px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: #9a9080;
+    }
+    .payment-method-value {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1a1a1a;
+      letter-spacing: 1px;
+      margin-top: 2px;
+    }
+    .payment-status {
+      font-size: 9px;
+      letter-spacing: 2px;
+      font-weight: 600;
+      text-transform: uppercase;
+      background: #1a1a1a;
+      color: #faf8f4;
+      padding: 5px 10px;
+    }
+    .payment-time {
+      font-size: 9px;
+      color: #9a9080;
+      margin-top: 2px;
+      text-align: right;
+    }
+
+    /* ── Footer ── */
+    .footer-divider {
+      border: none;
+      border-top: 1px dashed #c0b49e;
+      margin: 4px 0 16px;
+    }
+    .footer {
+      text-align: center;
+      padding-bottom: 24px;
+    }
+    .footer-thanks {
+      font-family: 'Playfair Display', serif;
+      font-size: 14px;
+      color: #3a3530;
+      margin-bottom: 10px;
+    }
+    .footer-tin {
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      color: #a09080;
+      line-height: 1.8;
+    }
+    .footer-tin span { color: #6a6055; font-weight: 600; }
+
+    /* ── Print styles ── */
+    @media print {
+      body { background: white; padding: 0; }
+      .receipt { border: none; box-shadow: none; }
+      .receipt::before, .receipt::after { display: none; }
+    }
+  </style>
 </head>
 <body>
+  <div class="page">
     <div class="receipt">
-        <div class="header">
-            <h1 class="restaurant-name">KUKU CHICKEN</h1>
-            <p class="restaurant-address">DIRE DIWA ADDIS ABABA</p>
-            <p>Phone: (555) 123-4567</p>
-            <p><strong>RECEIPT #${order.order_number}</strong></p>
-            <p>Date: ${new Date(order.order_time || Date.now()).toLocaleString()}</p>
+
+      <!-- ── HEADER ── -->
+      <div class="header">
+        <div class="header-badge">Official Tax Receipt</div>
+        <div class="restaurant-name">KUKU CHICKEN</div>
+        <div class="restaurant-sub">Dire Diwa · Addis Ababa</div>
+        <div class="header-divider"></div>
+        <div class="receipt-meta">
+          <span class="receipt-number">#${order.order_number}</span>
+          <span>${fmtDate} &nbsp;·&nbsp; ${fmtTime}</span>
         </div>
-        
-        <div class="section-title">ORDER DETAILS</div>
-        <div class="row"><span>Customer:</span><span><strong>${order.customer_name || 'Walk-in Customer'}</strong></span></div>
-        <div class="row"><span>Table:</span><span><strong>${tableInfo}</strong></span></div>
-        <div class="row"><span>Cashier:</span><span>${order.cashier_name || 'System'}</span></div>
-        
-        <div class="section-title">ORDER ITEMS</div>
-        <table class="items-table">
+      </div>
+
+      <div class="tear"></div>
+
+      <!-- ── BODY ── -->
+      <div class="body">
+
+        <!-- Order info -->
+        <div class="info-grid">
+          <div class="section-label">Order Details</div>
+          <div class="info-row">
+            <span class="info-label">Customer</span>
+            <span class="info-value">${order.customer_name || 'Walk-in'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Table</span>
+            <span class="info-value">${tableInfo}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Served by</span>
+            <span class="info-value">${order.cashier_name || 'System'}</span>
+          </div>
+        </div>
+
+        <!-- Items -->
+        <div class="items-section">
+          <div class="section-label">Items Ordered</div>
+          <table class="items-table">
             <thead>
-                <tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr>
+              <tr>
+                <th style="text-align:left;width:45%">Description</th>
+                <th>Qty</th>
+                <th>Unit Price</th>
+                <th>Amount</th>
+              </tr>
             </thead>
             <tbody>
-                ${order.items && order.items.length > 0 ?
-                  order.items.map(item => `
-                    <tr>
-                        <td>${item.menu_item_name || item.name || 'Item'}</td>
-                        <td>${item.quantity || 1}</td>
-                        <td>${parseFloat(item.price || 0).toFixed(2)} ETB</td>
-                        <td>${(parseFloat(item.price || 0) * (item.quantity || 1)).toFixed(2)} ETB</td>
-                    </tr>
-                  `).join('') :
-                  '<tr><td colspan="4" style="text-align: center;">No items found</td></tr>'
-                }
+              ${order.items && order.items.length > 0
+                ? order.items.map(item => {
+                    const unitPrice = parseFloat(item.price || 0);
+                    const qty       = item.quantity || 1;
+                    const lineTotal = unitPrice * qty;
+                    return `
+                      <tr>
+                        <td class="item-name">${item.menu_item_name || item.name || 'Item'}</td>
+                        <td class="item-qty">${qty}</td>
+                        <td class="item-unit">${unitPrice.toFixed(2)}</td>
+                        <td class="item-total">${lineTotal.toFixed(2)} ETB</td>
+                      </tr>`;
+                  }).join('')
+                : '<tr><td colspan="4" style="text-align:center;padding:12px 0;color:#9a9080">No items</td></tr>'
+              }
             </tbody>
-        </table>
-        
-        <div class="total-section">
-            <div class="row"><span>Subtotal:</span><span>${subtotal.toFixed(2)} ETB</span></div>
-            <div class="row"><span>VAT (15%):</span><span>${vatAmount.toFixed(2)} ETB</span></div>
-            ${tip > 0 ? `<div class="row"><span>Tip:</span><span class="amount-positive">+${tip.toFixed(2)} ETB</span></div>` : ''}
-            ${discount > 0 ? `<div class="row"><span>Discount:</span><span class="amount-negative">-${discount.toFixed(2)} ETB</span></div>` : ''}
-            <div class="row highlight"><span>FINAL TOTAL:</span><span>${finalTotal.toFixed(2)} ETB</span></div>
+          </table>
         </div>
-        
-        <div class="payment-info">
-            <div class="section-title">PAYMENT INFORMATION</div>
-            <div class="row"><span>Payment Method:</span><span><strong>${(order.payment_method || 'CASH').toUpperCase()}</strong></span></div>
-            <div class="row"><span>Payment Status:</span><span style="color: #28a745; font-weight: bold;">${(order.payment_status || 'PAID').toUpperCase()}</span></div>
-            <div class="row"><span>Transaction Time:</span><span>${new Date(order.payment_time || Date.now()).toLocaleTimeString()}</span></div>
+
+        <!-- Totals -->
+        <div class="totals-block">
+          <div class="total-row">
+            <span>Net Amount (excl. VAT)</span>
+            <span>${netAmount.toFixed(2)} ETB</span>
+          </div>
+          <div class="total-row vat-row">
+            <span>VAT @ 15% &nbsp;<em>(incl. in price)</em></span>
+            <span>${vatAmount.toFixed(2)} ETB</span>
+          </div>
+          ${tip > 0 ? `
+          <div class="total-row tip-row">
+            <span>Tip / Service</span>
+            <span>+ ${tip.toFixed(2)} ETB</span>
+          </div>` : ''}
+          ${discount > 0 ? `
+          <div class="total-row disc-row">
+            <span>Discount</span>
+            <span>− ${discount.toFixed(2)} ETB</span>
+          </div>` : ''}
+          <hr class="total-separator">
+          <div class="total-row grand">
+            <span>TOTAL</span>
+            <span>${finalTotal.toFixed(2)} ETB</span>
+          </div>
         </div>
-        
+
+        <!-- Payment -->
+        <div class="payment-block">
+          <div>
+            <div class="payment-method-label">Payment Method</div>
+            <div class="payment-method-value">${(order.payment_method || 'CASH').toUpperCase()}</div>
+          </div>
+          <div style="text-align:right">
+            <div class="payment-status">${(order.payment_status || 'PAID').toUpperCase()}</div>
+            <div class="payment-time">${fmtPay}</div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <hr class="footer-divider">
         <div class="footer">
-            <p>Thank you for dining with us!</p>
-            <p class="vat-note">VAT included at 15% | TIN: 0000000</p>
+          <div class="footer-thanks">Thank you for dining with us</div>
+          <div class="footer-tin">
+            VAT Registration No. &nbsp;<span>ETH-VAT-000000</span><br>
+            TIN: <span>0000000</span> &nbsp;·&nbsp; VAT incl. at 15%<br>
+            Kuku Chicken · Addis Ababa, Ethiopia
+          </div>
         </div>
-    </div>
-    <script>setTimeout(() => { window.print(); }, 500);</script>
+
+      </div><!-- /body -->
+    </div><!-- /receipt -->
+  </div>
+
+  <script>setTimeout(() => { window.print(); }, 600);</script>
 </body>
 </html>`;
 

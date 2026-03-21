@@ -53,6 +53,8 @@ router.get('/financial/vat', authenticateToken, authorizeRole(['admin', 'manager
 router.get('/financial/summary', authenticateToken, authorizeRole(['admin', 'manager']), 
   ReportController.getFinancialSummary);
 
+// routes/report.routes.js - Add this route
+
 
 
 // Get quick stats (for dashboard widgets)
@@ -66,5 +68,12 @@ router.get('/quick-stats', authenticateToken, (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+router.post(
+  '/advanced',
+  authenticateToken,
+  ReportController.generateAdvancedReport
+);
+ 
 
 module.exports = router;
