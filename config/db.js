@@ -6,7 +6,7 @@ class Database {
     // Create a MySQL pool
     this.pool = mysql.createPool({
       host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
+      user: process.env.DB_USER || 'vortex-admin',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'restaurant_erp',
       port: process.env.DB_PORT || 3306,
