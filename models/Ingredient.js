@@ -349,7 +349,7 @@ class Ingredient {
         WHERE it.ingredient_id = ?
       `;
 
-      const params = [ingredientId];
+      const params = [parseInt(ingredientId)];
 
       if (filters.type) {
         sql += ' AND it.transaction_type = ?';
@@ -366,11 +366,8 @@ class Ingredient {
         params.push(filters.end_date + ' 23:59:59');
       }
 
-      sql += ' ORDER BY it.created_at DESC';
-
       const limit = parseInt(filters.limit) || 100;
-      sql += ' LIMIT ?';
-      params.push(limit);
+      sql += ' ORDER BY it.created_at DESC LIMIT ' + limit;
 
       const rows = await db.query(sql, params);
       return rows || [];
@@ -386,15 +383,15 @@ class Ingredient {
       const rows = await db.query(`
         SELECT
           transaction_type,
-          COUNT(*)                                          as count,
-          SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END)  as total_in,
+          COUNT(*)                                              as count,
+          SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END) as total_in,
           SUM(CASE WHEN quantity < 0 THEN ABS(quantity) ELSE 0 END) as total_out,
-          MAX(created_at)                                    as last_occurrence
+          MAX(created_at)                                       as last_occurrence
         FROM ingredient_transactions
         WHERE ingredient_id = ?
         GROUP BY transaction_type
         ORDER BY last_occurrence DESC
-      `, [ingredientId]);
+      `, [parseInt(ingredientId)]);
 
       return rows || [];
     } catch (error) {
