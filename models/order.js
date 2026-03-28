@@ -435,8 +435,12 @@ ORDER BY oi.status ASC
         throw new Error('Cannot cancel completed order');
       }
       
-      // Update order status
+      // Update order status + void payment
       await this.updateStatus(id, 'cancelled');
+      await db.execute(
+        "UPDATE orders SET payment_status = 'voided' WHERE id = ? AND payment_status = 'pending'",
+        [id]
+      );
       
       // Free table if occupied
       if (order.table_id) {
@@ -1387,6 +1391,172 @@ static async getDailySalesReport(date = null) {
     throw new Error(`Error getting daily sales report: ${error.message}`);
   }
 }
+
+  // ========== REMOVE SINGLE ORDER ITEM (waiter, pending only) ==========
+  static async removeItem(orderId, itemId, waiterId) {
+    const connection = await db.beginTransaction();
+    try {
+      // 1. Fetch order
+      const order = await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+      if (!order) throw new Error('Order not found');
+
+      // 2. Only pending orders
+      if (order.status !== 'pending') {
+        throw new Error(`Cannot remove items from a ${order.status} order. Only pending orders can be modified.`);
+      }
+
+      // 3. Waiter must own the order
+      if (parseInt(order.waiter_id) !== parseInt(waiterId)) {
+        throw new Error('You can only modify your own orders');
+      }
+
+      // 4. Get the item
+      const item = await db.queryOne(
+        'SELECT * FROM order_items WHERE id = ? AND order_id = ?',
+        [itemId, orderId]
+      );
+      if (!item) throw new Error('Order item not found');
+
+      // 5. Block removing last item
+      const [countRow] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM order_items WHERE order_id = ?',
+        [orderId]
+      );
+      if (countRow[0].cnt <= 1) {
+        throw new Error('Cannot remove the last item. Cancel the order instead.');
+      }
+
+      // 6. Delete item
+      await connection.query('DELETE FROM order_items WHERE id = ?', [itemId]);
+
+      // 7. Recalculate total from remaining items
+      const [totalRow] = await connection.query(
+        'SELECT COALESCE(SUM(price * quantity), 0) as total FROM order_items WHERE order_id = ?',
+        [orderId]
+      );
+      const newTotal = parseFloat(totalRow[0].total).toFixed(2);
+      await connection.query('UPDATE orders SET total_amount = ?, updated_at = NOW() WHERE id = ?', [newTotal, orderId]);
+
+      await connection.commit();
+      return { removed_item: item, new_total: parseFloat(newTotal) };
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // ========== REQUEST CANCELLATION (waiter) ==========
+  // Reuses existing flag columns: flag_note, flagged_by, flagged_at
+  static async requestCancellation(orderId, waiterId, reason = '') {
+    const order = await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!order) throw new Error('Order not found');
+
+    if (order.status !== 'pending') {
+      throw new Error(`Cannot request cancellation for a ${order.status} order. Only pending orders can be cancelled.`);
+    }
+
+    if (parseInt(order.waiter_id) !== parseInt(waiterId)) {
+      throw new Error('You can only cancel your own orders');
+    }
+
+    await db.execute(`
+      UPDATE orders SET
+        status     = 'pending_cancellation',
+        flag_note  = ?,
+        flagged_by = ?,
+        flagged_at = NOW(),
+        updated_at = NOW()
+      WHERE id = ?
+    `, [reason || null, waiterId, orderId]);
+
+    return await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+  }
+
+  // ========== APPROVE CANCELLATION (manager/admin) ==========
+  // Reuses existing columns: resolved_by, resolved_at, resolution
+  static async approveCancellation(orderId, managerId) {
+    const connection = await db.beginTransaction();
+    try {
+      const order = await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+      if (!order) throw new Error('Order not found');
+
+      if (order.status !== 'pending_cancellation') {
+        throw new Error('Order is not pending cancellation');
+      }
+
+      await connection.query(`
+        UPDATE orders SET
+          status         = 'cancelled',
+          payment_status = 'voided',
+          resolved_by    = ?,
+          resolved_at    = NOW(),
+          updated_at     = NOW()
+        WHERE id = ?
+      `, [managerId, orderId]);
+
+      // Free the table if dine-in
+      if (order.table_id) {
+        await connection.query(
+          'UPDATE tables SET status = "available", customer_count = 0 WHERE id = ?',
+          [order.table_id]
+        );
+      }
+
+      await connection.commit();
+      return await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // ========== REJECT CANCELLATION (manager/admin) ==========
+  // Reverts to pending, logs rejection in resolution column
+  static async rejectCancellation(orderId, managerId) {
+    const order = await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!order) throw new Error('Order not found');
+
+    if (order.status !== 'pending_cancellation') {
+      throw new Error('Order is not pending cancellation');
+    }
+
+    await db.execute(`
+      UPDATE orders SET
+        status      = 'pending',
+        flag_note   = NULL,
+        flagged_by  = NULL,
+        flagged_at  = NULL,
+        resolved_by = ?,
+        resolved_at = NOW(),
+        resolution  = 'cancellation_rejected',
+        updated_at  = NOW()
+      WHERE id = ?
+    `, [managerId, orderId]);
+
+    return await db.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+  }
+
+  // ========== GET PENDING CANCELLATIONS (manager dashboard) ==========
+  static async getPendingCancellations() {
+    return await db.query(`
+      SELECT
+        o.*,
+        u.username          as waiter_name,
+        t.table_number,
+        fu.username         as requested_by_name
+      FROM orders o
+      LEFT JOIN users u   ON o.waiter_id  = u.id
+      LEFT JOIN tables t  ON o.table_id   = t.id
+      LEFT JOIN users fu  ON o.flagged_by = fu.id
+      WHERE o.status = 'pending_cancellation'
+      ORDER BY o.flagged_at ASC
+    `);
+  }
+
 
 }
 

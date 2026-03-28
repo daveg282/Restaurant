@@ -649,6 +649,121 @@ static async getDailyOrders(req, res) {
   }
 }
   
+  // ========== REMOVE SINGLE ITEM (waiter, pending only) ==========
+  static async removeOrderItem(req, res) {
+    try {
+      const { id, item_id } = req.params;
+      const waiterId = req.user.id;
+      const userRole = req.user.role;
+
+      // Managers/admin can also remove items freely
+      const isManager = ['admin', 'manager'].includes(userRole);
+
+      const order = await Order.findById(id);
+      if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+
+      if (order.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot remove items from a ${order.status} order. Only pending orders can be modified.`
+        });
+      }
+
+      if (!isManager && order.waiter_id !== waiterId) {
+        return res.status(403).json({ success: false, error: 'You can only modify your own orders' });
+      }
+
+      const result = await Order.removeItem(id, item_id, isManager ? order.waiter_id : waiterId);
+
+      res.json({
+        success: true,
+        message: 'Item removed successfully',
+        removed_item: result.removed_item,
+        new_total: result.new_total
+      });
+    } catch (error) {
+      console.error('Remove order item error:', error);
+      const isValidation = ['Cannot remove', 'Only pending', 'last item', 'own orders'].some(m => error.message.includes(m));
+      res.status(isValidation ? 400 : 500).json({ success: false, error: error.message });
+    }
+  }
+
+  // ========== REQUEST CANCELLATION (waiter) ==========
+  static async requestCancellation(req, res) {
+    try {
+      const { id } = req.params;
+      const { reason } = req.body;
+      const waiterId = req.user.id;
+
+      const order = await Order.requestCancellation(id, waiterId, reason);
+
+      res.json({
+        success: true,
+        message: 'Cancellation request submitted. Awaiting manager approval.',
+        order
+      });
+    } catch (error) {
+      console.error('Request cancellation error:', error);
+      const isValidation = ['pending', 'own orders', 'not found'].some(m => error.message.includes(m));
+      res.status(isValidation ? 400 : 500).json({ success: false, error: error.message });
+    }
+  }
+
+  // ========== APPROVE CANCELLATION (manager/admin) ==========
+  static async approveCancellation(req, res) {
+    try {
+      const { id } = req.params;
+      const managerId = req.user.id;
+
+      const order = await Order.approveCancellation(id, managerId);
+
+      res.json({
+        success: true,
+        message: 'Order cancellation approved',
+        order
+      });
+    } catch (error) {
+      console.error('Approve cancellation error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  // ========== REJECT CANCELLATION (manager/admin) ==========
+  static async rejectCancellation(req, res) {
+    try {
+      const { id } = req.params;
+      const managerId = req.user.id;
+
+      const order = await Order.rejectCancellation(id, managerId);
+
+      res.json({
+        success: true,
+        message: 'Cancellation request rejected. Order is back to pending.',
+        order
+      });
+    } catch (error) {
+      console.error('Reject cancellation error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  // ========== GET PENDING CANCELLATIONS (manager dashboard) ==========
+  static async getPendingCancellations(req, res) {
+    try {
+      const orders = await Order.getPendingCancellations();
+
+      res.json({
+        success: true,
+        orders,
+        count: orders.length
+      });
+    } catch (error) {
+      console.error('Get pending cancellations error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+
 }
 
 module.exports = OrderController;

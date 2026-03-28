@@ -23,6 +23,12 @@ router.get('/waiter/active', authenticateToken, authorizeRole(['waiter']), Order
 // Get kitchen orders (chef/admin/manager)
 router.get('/kitchen', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), OrderController.getKitchenOrders);
 
+// Manager fetches all pending cancellations
+router.get('/pending-cancellations',
+  authenticateToken,
+  authorizeRole(['admin', 'manager']),
+  OrderController.getPendingCancellations);
+
 // Get single order
 router.get('/:id', authenticateToken, OrderController.getOrder);
 
@@ -38,8 +44,33 @@ router.delete('/:id/cancel', authenticateToken, authorizeRole(['admin', 'manager
 // Add item to order (waiter/cashier/admin/manager)
 router.post('/:id/items', authenticateToken, authorizeRole(['waiter', 'cashier', 'admin', 'manager']), OrderController.addItemToOrder);
 
-// Remove item from order (waiter/cashier/admin/manager)
-router.delete('/:id/items/:item_id', authenticateToken, authorizeRole(['waiter', 'cashier', 'admin', 'manager']), OrderController.removeItemFromOrder);
+
+// ========== ORDER ITEM REMOVAL (waiter — pending only, no approval) ==========
+router.delete('/:id/items/:item_id',
+  authenticateToken,
+  authorizeRole(['waiter', 'cashier', 'admin', 'manager']),
+  OrderController.removeOrderItem);
+
+// ========== CANCELLATION FLOW ==========
+// Waiter requests cancellation
+router.patch('/:id/request-cancellation',
+  authenticateToken,
+  authorizeRole(['waiter']),
+  OrderController.requestCancellation);
+
+// Manager approves cancellation
+router.patch('/:id/approve-cancellation',
+  authenticateToken,
+  authorizeRole(['admin', 'manager']),
+  OrderController.approveCancellation);
+
+// Manager rejects cancellation
+router.patch('/:id/reject-cancellation',
+  authenticateToken,
+  authorizeRole(['admin', 'manager']),
+  OrderController.rejectCancellation);
+
+
 
 // Update item status (kitchen - chef/admin/manager)
 router.patch('/items/:id/status', authenticateToken, authorizeRole(['chef', 'admin', 'manager']), OrderController.updateOrderStatus);

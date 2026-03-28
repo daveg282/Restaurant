@@ -3,114 +3,71 @@ const db = require('../config/db');
 
 class Ingredient {
   // ========== GET METHODS ==========
-  
-  // models/Ingredient.js
-static async getAll(filters = {}) {
-  try {
-    let sql = `
-      SELECT i.*, s.name as supplier_name
-      FROM ingredients i
-      LEFT JOIN suppliers s ON i.supplier_id = s.id
-      WHERE 1=1
-    `;
-    
-    const params = [];
-    
-    if (filters.category) {
-      sql += ' AND i.category = ?';
-      params.push(filters.category);
-    }
-    
-    if (filters.search) {
-      sql += ' AND (i.name LIKE ? OR i.notes LIKE ?)';
-      const searchTerm = `%${filters.search}%`;
-      params.push(searchTerm, searchTerm);
-    }
-    
-    if (filters.low_stock === 'true') {
-      sql += ' AND i.current_stock <= i.minimum_stock';
-    }
-    
-    sql += ' ORDER BY i.name ASC';
-    
-    if (filters.limit) {
-      sql += ' LIMIT ?';
-      params.push(parseInt(filters.limit));
-    }
-    
-    // IMPORTANT: Return directly like MenuItem.getAll()
-    return await db.query(sql, params);
-    
-  } catch (error) {
-    throw new Error(`Error getting ingredients: ${error.message}`);
-  }
-}
 
-// models/Ingredient.js
-static async getCategories() {
-  try {
-    console.log('🔍 Running category query...');
-    
-    // Don't destructure - get the raw result
-    const result = await db.query(`
-      SELECT DISTINCT category 
-      FROM ingredients 
-      WHERE category IS NOT NULL 
-        AND category != ''
-      ORDER BY category ASC
-    `);
-    
-    console.log('📦 Raw result type:', typeof result);
-    console.log('📦 Raw result:', result);
-    
-    // Handle different result types
-    let rows = [];
-    
-    if (Array.isArray(result)) {
-      // If it's an array, use it directly
-      rows = result;
-    } else if (result && typeof result === 'object') {
-      // If it's an object, check for rows property
-      rows = result.rows || [];
-    } else {
-      console.error('❌ Unexpected result type:', typeof result);
-      return [];
+  static async getAll(filters = {}) {
+    try {
+      let sql = `
+        SELECT i.*, s.name as supplier_name
+        FROM ingredients i
+        LEFT JOIN suppliers s ON i.supplier_id = s.id
+        WHERE 1=1
+      `;
+
+      const params = [];
+
+      if (filters.category) {
+        sql += ' AND i.category = ?';
+        params.push(filters.category);
+      }
+
+      if (filters.search) {
+        sql += ' AND (i.name LIKE ? OR i.notes LIKE ?)';
+        const searchTerm = `%${filters.search}%`;
+        params.push(searchTerm, searchTerm);
+      }
+
+      if (filters.low_stock === 'true') {
+        sql += ' AND i.current_stock <= i.minimum_stock';
+      }
+
+      sql += ' ORDER BY i.name ASC';
+
+      if (filters.limit) {
+        sql += ' LIMIT ?';
+        params.push(parseInt(filters.limit));
+      }
+
+      return await db.query(sql, params);
+    } catch (error) {
+      throw new Error(`Error getting ingredients: ${error.message}`);
     }
-    
-    // Ensure rows is an array
-    if (!Array.isArray(rows)) {
-      console.error('❌ Rows is not an array:', rows);
-      return [];
-    }
-    
-    console.log('📊 Processed rows:', rows);
-    
-    // Extract categories
-    const categoryList = rows
-      .map(row => {
-        // Handle if row is a string or object
-        if (typeof row === 'string') return row;
-        if (row && typeof row === 'object') return row.category;
-        return null;
-      })
-      .filter(cat => cat && typeof cat === 'string' && cat.trim() !== '')
-      .map(cat => cat.trim());
-    
-    console.log(`✅ Found ${categoryList.length} categories:`, categoryList);
-    
-    return categoryList;
-    
-  } catch (error) {
-    console.error('❌ Error in Ingredient.getCategories:', error);
-    return [];
   }
-}
-  // Get ingredient by ID with ALL details
+
+  static async getCategories() {
+    try {
+      const result = await db.query(`
+        SELECT DISTINCT category
+        FROM ingredients
+        WHERE category IS NOT NULL AND category != ''
+        ORDER BY category ASC
+      `);
+
+      let rows = Array.isArray(result) ? result : (result.rows || []);
+
+      return rows
+        .map(row => (typeof row === 'string' ? row : row?.category))
+        .filter(cat => cat && typeof cat === 'string' && cat.trim() !== '')
+        .map(cat => cat.trim());
+    } catch (error) {
+      console.error('Error in Ingredient.getCategories:', error);
+      return [];
+    }
+  }
+
   static async findById(id) {
     try {
-      // Get basic ingredient info with supplier
-      const [rows] = await db.query(`
-        SELECT 
+      const rows = await db.query(`
+        SELECT
           i.*,
           s.name as supplier_name,
           s.contact_person,
@@ -121,13 +78,12 @@ static async getCategories() {
         LEFT JOIN suppliers s ON i.supplier_id = s.id
         WHERE i.id = ?
       `, [id]);
-      
+
       const ingredient = rows[0];
       if (!ingredient) return null;
-      
-      // Get all recipes that use this ingredient
-      const [recipes] = await db.query(`
-        SELECT 
+
+      const recipes = await db.query(`
+        SELECT
           mi.id,
           mi.name as menu_item_name,
           mi.price,
@@ -142,34 +98,20 @@ static async getCategories() {
         WHERE mii.ingredient_id = ?
         ORDER BY mi.name ASC
       `, [id]);
-      
-      // Get stock history (if you have a stock_history table)
-      const [stockHistory] = await db.query(`
-        SELECT 
-          sh.*,
-          u.username as updated_by_name,
-          u.role as updated_by_role
-        FROM stock_history sh
-        LEFT JOIN users u ON sh.updated_by = u.id
-        WHERE sh.ingredient_id = ?
-        ORDER BY sh.updated_at DESC
-        LIMIT 20
-      `, [id]);
-      
-      // Get supplier info if exists
+
+      // Fetch recent transactions (last 20) for the detail view
+      const recentTransactions = await Ingredient.getTransactions(id, { limit: 20 });
+
       let supplier = null;
       if (ingredient.supplier_id) {
-        const [suppliers] = await db.query(
-          'SELECT * FROM suppliers WHERE id = ?',
-          [ingredient.supplier_id]
-        );
+        const suppliers = await db.query('SELECT * FROM suppliers WHERE id = ?', [ingredient.supplier_id]);
         supplier = suppliers[0] || null;
       }
-      
+
       return {
         ...ingredient,
         recipes,
-        stock_history: stockHistory,
+        stock_history: recentTransactions, // keeps backward compat with existing UI
         supplier_details: supplier,
         used_in_recipes_count: recipes.length,
         is_low_stock: parseFloat(ingredient.current_stock) <= parseFloat(ingredient.minimum_stock)
@@ -180,140 +122,123 @@ static async getCategories() {
     }
   }
 
- // models/Ingredient.js - SIMPLE create method
-static async create(ingredientData) {
-  const connection = await db.beginTransaction();
-  
-  try {
-    const {
-      name, unit, current_stock = 0, minimum_stock = 10,
-      cost_per_unit = 0, supplier_id, category, notes
-    } = ingredientData;
-    
-    console.log('Creating:', name);
-    
-    // Insert ingredient
-    const [result] = await connection.query(`
-      INSERT INTO ingredients 
-      (name, unit, current_stock, minimum_stock, cost_per_unit, 
-       supplier_id, category, notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-    `, [
-      name, unit, current_stock, minimum_stock, 
-      cost_per_unit, supplier_id, category, notes
-    ]);
-    
-    await connection.commit();
-    
-    // Just return what was inserted with the ID
-    return {
-      id: result.insertId,
-      name: name,
-      unit: unit,
-      current_stock: current_stock,
-      minimum_stock: minimum_stock,
-      cost_per_unit: cost_per_unit,
-      supplier_id: supplier_id,
-      category: category,
-      notes: notes,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      supplier_name: null // We'll add this later if needed
-    };
-    
-  } catch (error) {
-    await connection.rollback();
-    console.error('Create error:', error);
-    throw error;
-  } finally {
-    connection.release();
-  }
-}
-  // ========== UPDATE METHOD ==========
-  // models/Ingredient.js - SIMPLEST update method
-static async update(id, updateData) {
-  try {
-    console.log('Updating ingredient ID:', id, 'with:', updateData);
-    
-    // Check if ingredient exists first
-    const [checkRows] = await db.query(
-      'SELECT * FROM ingredients WHERE id = ?',
-      [id]
-    );
-    
-    if (!checkRows || checkRows.length === 0) {
-      throw new Error(`Ingredient ${id} not found`);
-    }
-    
-    // Build update query
-    const allowedFields = [
-      'name', 'unit', 'current_stock', 'minimum_stock', 
-      'cost_per_unit', 'supplier_id', 'category', 'notes'
-    ];
-    
-    const updates = [];
-    const params = [];
-    
-    Object.keys(updateData).forEach(key => {
-      if (allowedFields.includes(key) && updateData[key] !== undefined) {
-        updates.push(`${key} = ?`);
-        params.push(updateData[key]);
-      }
-    });
-    
-    if (updates.length === 0) {
-      return checkRows[0]; // No changes
-    }
-    
-    updates.push('updated_at = NOW()');
-    params.push(id);
-    
-    // Execute update
-    await db.query(
-      `UPDATE ingredients SET ${updates.join(', ')} WHERE id = ?`,
-      params
-    );
-    
-    // Return merged data
-    return {
-      ...checkRows[0],
-      ...updateData,
-      id: id,
-      updated_at: new Date().toISOString()
-    };
-    
-  } catch (error) {
-    console.error('Update error:', error);
-    throw error;
-  }
-}
+  // ========== CREATE ==========
+  static async create(ingredientData, performedBy = null) {
+    const connection = await db.beginTransaction();
 
-  // ========== DELETE METHOD ==========
+    try {
+      const {
+        name, unit, current_stock = 0, minimum_stock = 10,
+        cost_per_unit = 0, supplier_id, category, notes
+      } = ingredientData;
+
+      const [result] = await connection.query(`
+        INSERT INTO ingredients
+          (name, unit, current_stock, minimum_stock, cost_per_unit,
+           supplier_id, category, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+      `, [name, unit, current_stock, minimum_stock, cost_per_unit, supplier_id, category, notes]);
+
+      const ingredientId = result.insertId;
+
+      // Log initial stock transaction if stock > 0
+      if (parseFloat(current_stock) > 0) {
+        await connection.query(`
+          INSERT INTO ingredient_transactions
+            (ingredient_id, transaction_type, quantity, quantity_before, quantity_after,
+             cost_per_unit, notes, performed_by, created_at)
+          VALUES (?, 'initial', ?, 0, ?, ?, 'Initial stock on ingredient creation', ?, NOW())
+        `, [
+          ingredientId,
+          parseFloat(current_stock),
+          parseFloat(current_stock),
+          parseFloat(cost_per_unit),
+          performedBy
+        ]);
+      }
+
+      await connection.commit();
+
+      return {
+        id: ingredientId,
+        name, unit, current_stock, minimum_stock,
+        cost_per_unit, supplier_id, category, notes,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        supplier_name: null
+      };
+    } catch (error) {
+      await connection.rollback();
+      console.error('Create error:', error);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // ========== UPDATE ==========
+  static async update(id, updateData) {
+    try {
+      const checkRows = await db.query('SELECT * FROM ingredients WHERE id = ?', [id]);
+
+      if (!checkRows || checkRows.length === 0) {
+        throw new Error(`Ingredient ${id} not found`);
+      }
+
+      const allowedFields = [
+        'name', 'unit', 'current_stock', 'minimum_stock',
+        'cost_per_unit', 'supplier_id', 'category', 'notes'
+      ];
+
+      const updates = [];
+      const params = [];
+
+      Object.keys(updateData).forEach(key => {
+        if (allowedFields.includes(key) && updateData[key] !== undefined) {
+          updates.push(`${key} = ?`);
+          params.push(updateData[key]);
+        }
+      });
+
+      if (updates.length === 0) return checkRows[0];
+
+      updates.push('updated_at = NOW()');
+      params.push(id);
+
+      await db.query(`UPDATE ingredients SET ${updates.join(', ')} WHERE id = ?`, params);
+
+      return {
+        ...checkRows[0],
+        ...updateData,
+        id: parseInt(id),
+        updated_at: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('Update error:', error);
+      throw error;
+    }
+  }
+
+  // ========== DELETE ==========
   static async delete(id) {
     const connection = await db.beginTransaction();
-    
+
     try {
-      // Check if ingredient is used in recipes
       const [usedInRecipes] = await connection.query(
         'SELECT COUNT(*) as count FROM menu_item_ingredients WHERE ingredient_id = ?',
         [id]
       );
-      
+
       if (usedInRecipes[0].count > 0) {
         await connection.rollback();
         throw new Error('Cannot delete ingredient: It is used in one or more recipes');
       }
-      
-      // Delete from ingredients table
+
+      // Transactions are deleted automatically via ON DELETE CASCADE
       await connection.query('DELETE FROM ingredients WHERE id = ?', [id]);
-      
-      // Also delete stock history (optional
+
       await connection.commit();
-      
-      return { 
-        message: 'Ingredient deleted successfully',
-        id: id
-      };
+      return { message: 'Ingredient deleted successfully', id };
     } catch (error) {
       await connection.rollback();
       console.error('Error in Ingredient.delete:', error);
@@ -323,13 +248,167 @@ static async update(id, updateData) {
     }
   }
 
+  // ========== UPDATE STOCK (with transaction logging) ==========
+  static async updateStock(id, quantity, performedBy = null, type = null, notes = null, referenceId = null, referenceType = null) {
+    const connection = await db.beginTransaction();
+
+    try {
+      const [rows] = await connection.query('SELECT current_stock, cost_per_unit FROM ingredients WHERE id = ?', [id]);
+
+      if (!rows || rows.length === 0) {
+        throw new Error(`Ingredient ${id} not found`);
+      }
+
+      const oldStock    = parseFloat(rows[0].current_stock);
+      const costPerUnit = parseFloat(rows[0].cost_per_unit);
+      const adjustment  = parseFloat(quantity);
+      const newStock    = oldStock + adjustment;
+
+      // Prevent negative stock
+      if (newStock < 0) {
+        await connection.rollback();
+        connection.release();
+        throw new Error(`Insufficient stock. Available: ${oldStock}, Requested: ${Math.abs(adjustment)}`);
+      }
+
+      // Determine transaction type automatically if not provided
+      let txType = type;
+      if (!txType) {
+        if (adjustment > 0) txType = 'restock';
+        else if (adjustment < 0) txType = 'removal';
+        else txType = 'adjustment';
+      }
+
+      // Update stock
+      await connection.query(
+        'UPDATE ingredients SET current_stock = ?, updated_at = NOW() WHERE id = ?',
+        [newStock, id]
+      );
+
+      // Log transaction
+      await connection.query(`
+        INSERT INTO ingredient_transactions
+          (ingredient_id, transaction_type, quantity, quantity_before, quantity_after,
+           cost_per_unit, reference_id, reference_type, notes, performed_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      `, [
+        id, txType, adjustment, oldStock, newStock,
+        costPerUnit, referenceId, referenceType,
+        notes || `Stock ${adjustment >= 0 ? 'increased' : 'decreased'} by ${Math.abs(adjustment)}`,
+        performedBy
+      ]);
+
+      await connection.commit();
+
+      return { id, new_stock: newStock, adjustment };
+    } catch (error) {
+      await connection.rollback();
+      console.error('Update stock error:', error);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // ========== LOG TRANSACTION (standalone, for order usage etc.) ==========
+  static async logTransaction(data) {
+    const {
+      ingredient_id, transaction_type, quantity,
+      quantity_before, quantity_after, cost_per_unit,
+      reference_id, reference_type, notes, performed_by
+    } = data;
+
+    await db.query(`
+      INSERT INTO ingredient_transactions
+        (ingredient_id, transaction_type, quantity, quantity_before, quantity_after,
+         cost_per_unit, reference_id, reference_type, notes, performed_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    `, [
+      ingredient_id, transaction_type, quantity,
+      quantity_before, quantity_after, cost_per_unit,
+      reference_id || null, reference_type || null,
+      notes || null, performed_by || null
+    ]);
+  }
+
+  // ========== GET TRANSACTIONS (ledger per ingredient) ==========
+  static async getTransactions(ingredientId, filters = {}) {
+    try {
+      let sql = `
+        SELECT
+          it.*,
+          u.username   as performed_by_name,
+          u.role       as performed_by_role,
+          CASE
+            WHEN it.quantity > 0 THEN 'in'
+            WHEN it.quantity < 0 THEN 'out'
+            ELSE 'neutral'
+          END as direction
+        FROM ingredient_transactions it
+        LEFT JOIN users u ON it.performed_by = u.id
+        WHERE it.ingredient_id = ?
+      `;
+
+      const params = [ingredientId];
+
+      if (filters.type) {
+        sql += ' AND it.transaction_type = ?';
+        params.push(filters.type);
+      }
+
+      if (filters.start_date) {
+        sql += ' AND it.created_at >= ?';
+        params.push(filters.start_date);
+      }
+
+      if (filters.end_date) {
+        sql += ' AND it.created_at <= ?';
+        params.push(filters.end_date + ' 23:59:59');
+      }
+
+      sql += ' ORDER BY it.created_at DESC';
+
+      const limit = parseInt(filters.limit) || 100;
+      sql += ' LIMIT ?';
+      params.push(limit);
+
+      const rows = await db.query(sql, params);
+      return rows || [];
+    } catch (error) {
+      console.error('Error in Ingredient.getTransactions:', error);
+      throw error;
+    }
+  }
+
+  // ========== GET TRANSACTION SUMMARY (stats per ingredient) ==========
+  static async getTransactionSummary(ingredientId) {
+    try {
+      const rows = await db.query(`
+        SELECT
+          transaction_type,
+          COUNT(*)                                          as count,
+          SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END)  as total_in,
+          SUM(CASE WHEN quantity < 0 THEN ABS(quantity) ELSE 0 END) as total_out,
+          MAX(created_at)                                    as last_occurrence
+        FROM ingredient_transactions
+        WHERE ingredient_id = ?
+        GROUP BY transaction_type
+        ORDER BY last_occurrence DESC
+      `, [ingredientId]);
+
+      return rows || [];
+    } catch (error) {
+      console.error('Error in Ingredient.getTransactionSummary:', error);
+      throw error;
+    }
+  }
+
   // ========== BATCH OPERATIONS ==========
-  
-  // Get all ingredients by category
+
   static async getByCategory(category) {
     try {
-      const [ingredients] = await db.query(`
-        SELECT 
+      const ingredients = await db.query(`
+        SELECT
           i.*,
           s.name as supplier_name,
           COUNT(DISTINCT mii.menu_item_id) as used_in_recipes_count
@@ -340,7 +419,7 @@ static async update(id, updateData) {
         GROUP BY i.id
         ORDER BY i.name ASC
       `, [category]);
-      
+
       return ingredients;
     } catch (error) {
       console.error('Error in Ingredient.getByCategory:', error);
@@ -348,46 +427,37 @@ static async update(id, updateData) {
     }
   }
 
-  // Get low stock ingredients
   static async getLowStock() {
-  try {
-    const [ingredients] = await db.query(`
-      SELECT 
-        i.*,
-        s.name as supplier_name,
-        s.contact_person,
-        s.phone as supplier_phone,
-        ROUND((i.current_stock / i.minimum_stock) * 100, 2) as stock_percentage
-      FROM ingredients i
-      LEFT JOIN suppliers s ON i.supplier_id = s.id
-      WHERE i.current_stock <= i.minimum_stock
-      ORDER BY i.current_stock / i.minimum_stock ASC
-    `);
-
-    return ingredients || [];
-
-  } catch (error) {
-    console.error('Error in Ingredient.getLowStock:', error);
-    return [];   // safer than throwing
-  }
-}
-
-  // Get ingredients with supplier info
-  static async getWithSuppliers() {
     try {
-      const [ingredients] = await db.query(`
-        SELECT 
+      const ingredients = await db.query(`
+        SELECT
           i.*,
           s.name as supplier_name,
           s.contact_person,
-          s.phone,
-          s.email,
-          s.address
+          s.phone as supplier_phone,
+          ROUND((i.current_stock / i.minimum_stock) * 100, 2) as stock_percentage
+        FROM ingredients i
+        LEFT JOIN suppliers s ON i.supplier_id = s.id
+        WHERE i.current_stock <= i.minimum_stock
+        ORDER BY i.current_stock / i.minimum_stock ASC
+      `);
+
+      return ingredients || [];
+    } catch (error) {
+      console.error('Error in Ingredient.getLowStock:', error);
+      return [];
+    }
+  }
+
+  static async getWithSuppliers() {
+    try {
+      const ingredients = await db.query(`
+        SELECT i.*, s.name as supplier_name, s.contact_person, s.phone, s.email, s.address
         FROM ingredients i
         LEFT JOIN suppliers s ON i.supplier_id = s.id
         ORDER BY i.name ASC
       `);
-      
+
       return ingredients;
     } catch (error) {
       console.error('Error in Ingredient.getWithSuppliers:', error);
@@ -395,12 +465,10 @@ static async update(id, updateData) {
     }
   }
 
-  // Get stock summary statistics
   static async getStockSummary() {
     try {
-      // Get category-wise summary
-      const [categorySummary] = await db.query(`
-        SELECT 
+      const categorySummary = await db.query(`
+        SELECT
           category,
           COUNT(*) as total_items,
           SUM(current_stock) as total_stock,
@@ -411,10 +479,9 @@ static async update(id, updateData) {
         GROUP BY category
         ORDER BY total_value DESC
       `);
-      
-      // Get overall totals
-      const [overallTotals] = await db.query(`
-        SELECT 
+
+      const overallTotals = await db.query(`
+        SELECT
           COUNT(*) as total_ingredients,
           SUM(current_stock) as overall_stock,
           SUM(cost_per_unit * current_stock) as overall_value,
@@ -422,20 +489,15 @@ static async update(id, updateData) {
           SUM(CASE WHEN current_stock = 0 THEN 1 ELSE 0 END) as total_out_of_stock
         FROM ingredients
       `);
-      
-      // Get top 5 most valuable items
-      const [mostValuable] = await db.query(`
-        SELECT 
-          name,
-          category,
-          current_stock,
-          cost_per_unit,
-          ROUND(cost_per_unit * current_stock, 2) as value
+
+      const mostValuable = await db.query(`
+        SELECT name, category, current_stock, cost_per_unit,
+               ROUND(cost_per_unit * current_stock, 2) as value
         FROM ingredients
         ORDER BY value DESC
         LIMIT 5
       `);
-      
+
       return {
         category_summary: categorySummary,
         overall_totals: overallTotals[0] || {},
@@ -448,31 +510,20 @@ static async update(id, updateData) {
     }
   }
 
-  // ========== SPECIALIZED QUERIES ==========
-  
-  // Search ingredients by name or notes
   static async search(query) {
     try {
-      const [ingredients] = await db.query(`
-        SELECT 
+      const ingredients = await db.query(`
+        SELECT
           i.*,
           s.name as supplier_name,
-          CASE 
-            WHEN i.current_stock <= i.minimum_stock THEN 'Low'
-            ELSE 'Adequate'
-          END as stock_status
+          CASE WHEN i.current_stock <= i.minimum_stock THEN 'Low' ELSE 'Adequate' END as stock_status
         FROM ingredients i
         LEFT JOIN suppliers s ON i.supplier_id = s.id
-        WHERE i.name LIKE ? 
-           OR i.notes LIKE ?
-           OR i.category LIKE ?
-           OR s.name LIKE ?
+        WHERE i.name LIKE ? OR i.notes LIKE ? OR i.category LIKE ? OR s.name LIKE ?
         ORDER BY i.name ASC
         LIMIT 50
-      `, [
-        `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`
-      ]);
-      
+      `, [`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`]);
+
       return ingredients;
     } catch (error) {
       console.error('Error in Ingredient.search:', error);
@@ -480,57 +531,11 @@ static async update(id, updateData) {
     }
   }
 
-  // Update stock with transaction tracking
-  // models/Ingredient.js - CORRECT updateStock
-static async updateStock(id, quantity) {
-  const connection = await db.beginTransaction();
-  
-  try {
-    // Get current stock
-    const [rows] = await connection.query(
-      'SELECT current_stock FROM ingredients WHERE id = ?',
-      [id]
-    );
-    
-    if (!rows || rows.length === 0) {
-      throw new Error(`Ingredient ${id} not found`);
-    }
-    
-    const oldStock = parseFloat(rows[0].current_stock);
-    const newStock = oldStock + parseFloat(quantity);
-    
-    // Update stock
-    await connection.query(
-      'UPDATE ingredients SET current_stock = ?, updated_at = NOW() WHERE id = ?',
-      [newStock, id]
-    );
-    
-    await connection.commit();
-    
-    // Return new stock value
-    return { 
-      id: id,
-      new_stock: newStock,
-      adjustment: parseFloat(quantity)
-    };
-    
-  } catch (error) {
-    await connection.rollback();
-    console.error('Update stock error:', error);
-    throw error;
-  } finally {
-    connection.release();
-  }
-}
-
-  // Get ingredient usage statistics
   static async getUsageStats() {
     try {
-      const [usageStats] = await db.query(`
-        SELECT 
-          i.id,
-          i.name,
-          i.category,
+      const usageStats = await db.query(`
+        SELECT
+          i.id, i.name, i.category,
           COUNT(DISTINCT mii.menu_item_id) as used_in_recipes,
           GROUP_CONCAT(DISTINCT mi.name SEPARATOR ', ') as recipe_names
         FROM ingredients i
@@ -539,7 +544,7 @@ static async updateStock(id, quantity) {
         GROUP BY i.id
         ORDER BY used_in_recipes DESC
       `);
-      
+
       return usageStats;
     } catch (error) {
       console.error('Error in Ingredient.getUsageStats:', error);
